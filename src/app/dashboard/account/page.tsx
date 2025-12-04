@@ -346,18 +346,18 @@ export default function AccountPage() {
               <p className="text-white/60 text-xs">Pastikan password kuat dan unik.</p>
             </div>
           </div>
-          <div className="p-5"
-          {message && (
-            <div className="mb-4 flex items-center gap-2 text-green-300 bg-green-500/10 border border-green-500/30 rounded-lg p-3">
-              <FiCheckCircle /> <span>{message}</span>
-            </div>
-          )}
-          {error && (
-            <div className="mb-4 flex items-center gap-2 text-red-300 bg-red-500/10 border border-red-500/30 rounded-lg p-3">
-              <FiAlertCircle /> <span>{error}</span>
-            </div>
-          )}
-          <form onSubmit={handleChangePassword} className="space-y-4">
+          <div className="p-5">
+            {message && (
+              <div className="mb-4 flex items-center gap-2 text-green-300 bg-green-500/10 border border-green-500/30 rounded-lg p-3">
+                <FiCheckCircle /> <span>{message}</span>
+              </div>
+            )}
+            {error && (
+              <div className="mb-4 flex items-center gap-2 text-red-300 bg-red-500/10 border border-red-500/30 rounded-lg p-3">
+                <FiAlertCircle /> <span>{error}</span>
+              </div>
+            )}
+            <form onSubmit={handleChangePassword} className="space-y-4">
             <div className="grid sm:grid-cols-2 gap-3">
               <div className="sm:col-span-2">
                 <label className="block text-sm text-white/70 mb-1">Email</label>
