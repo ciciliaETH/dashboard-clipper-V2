@@ -102,11 +102,14 @@ export default function AccountPage() {
         throw new Error(data.error || 'Gagal upload gambar');
       }
       
+      // Update immediately with the new URL from upload response
       setProfilePictureUrl(data.url);
       setMessage('Profile picture berhasil diperbarui');
       
-      // Reload profile to get updated data
-      await loadProfile();
+      // Force reload to clear cache
+      setTimeout(() => {
+        window.location.reload();
+      }, 1000);
     } catch (e: any) {
       setError(e.message || 'Gagal upload profile picture');
     } finally {
