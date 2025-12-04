@@ -223,6 +223,16 @@ async function refreshHandler(req: Request) {
     ? Math.round(results.reduce((sum, r) => sum + (r.duration_ms || 0), 0) / results.length)
     : 0;
 
+  // Auto-refresh employee total metrics after successful refresh
+  if (successCount > 0) {
+    try {
+      await supa.rpc('refresh_employee_total_metrics');
+      console.log('[TikTok Refresh] Employee metrics refreshed');
+    } catch (e) {
+      console.error('[TikTok Refresh] Failed to refresh employee metrics:', e);
+    }
+  }
+
   return NextResponse.json({
     total_usernames: allUsernames.length,
     processed: results.length,
