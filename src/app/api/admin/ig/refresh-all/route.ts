@@ -70,10 +70,10 @@ async function refreshHandler(req: Request) {
   const isPost = req.method === 'POST';
   const body = isPost ? await req.json().catch(() => ({})) : {};
   
-  const batchSize = Math.max(1, Math.min(100, Number(body?.batch_size || 10)));
-  const delayMs = Math.max(0, Math.min(5000, Number(body?.delay_ms || 500)));
+  const batchSize = Math.max(1, Math.min(100, Number(body?.batch_size || 1)));
+  const delayMs = Math.max(0, Math.min(30000, Number(body?.delay_ms || 5000))); // Default 5 seconds, max 30s
   const limit = Math.max(1, Math.min(10000, Number(body?.limit || 1000)));
-  const onlyWithUserId = body?.only_with_user_id !== false; // default true
+  const onlyWithUserId = body?.only_with_user_id === true; // default FALSE - fetch all usernames
   
   // Get base URL for fetch-ig endpoint
   const protocol = req.headers.get('x-forwarded-proto') || 'http';

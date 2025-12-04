@@ -78,7 +78,7 @@ async function refreshHandler(req: Request) {
   const isPost = req.method === 'POST';
   const body = isPost ? await req.json().catch(() => ({})) : {};
   
-  const delayMs = Math.max(0, Math.min(10000, Number(body?.delay_ms || 8000)));
+  const delayMs = Math.max(0, Math.min(30000, Number(body?.delay_ms || 10000))); // Default 10 seconds, max 30s
   const limit = Math.max(1, Math.min(10000, Number(body?.limit || 1000)));
   
   // Get base URL for fetch-metrics endpoint
