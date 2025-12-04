@@ -1,20 +1,20 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { FiLock, FiEye, FiEyeOff, FiCheckCircle, FiAlertCircle, FiUser, FiCamera, FiTrendingUp } from "react-icons/fi";
+import { FiLock, FiEye, FiEyeOff, FiCheckCircle, FiAlertCircle, FiUser, FiCamera, FiTrendingUp, FiUpload } from "react-icons/fi";
 import { SiTiktok, SiInstagram } from "react-icons/si";
 import { format, parseISO } from 'date-fns';
 import { id as localeID } from 'date-fns/locale';
 
 export default function AccountPage() {
   const supabase = createClient();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [email, setEmail] = useState<string>("");
   const [fullName, setFullName] = useState<string>("");
   const [username, setUsername] = useState<string>("");
   const [profilePictureUrl, setProfilePictureUrl] = useState<string>("");
-  const [newProfilePicUrl, setNewProfilePicUrl] = useState<string>("");
-  const [editingPicture, setEditingPicture] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [nextPwd, setNextPwd] = useState("");
   const [confirm, setConfirm] = useState("");
   const [showNew, setShowNew] = useState(false);
@@ -82,29 +82,55 @@ export default function AccountPage() {
     }
   };
 
-  const handleUpdateProfilePicture = async () => {
-    if (!newProfilePicUrl.trim()) {
-      setError("URL gambar tidak boleh kosong");
-      return;
-    }
-    setLoading(true);
+  const handleUpdateProfilePicture = async (file: File) => {
+    setUploading(true);
     setMessage(null);
     setError(null);
+    
     try {
-      const res = await fetch('/api/employee/profile', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ profile_picture_url: newProfilePicUrl.trim() }),
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      const res = await fetch('/api/employee/upload-profile-picture', {
+        method: 'POST',
+        body: formData,
       });
-      if (!res.ok) throw new Error('Gagal update profile picture');
-      setProfilePictureUrl(newProfilePicUrl.trim());
-      setNewProfilePicUrl('');
-      setEditingPicture(false);
+      
+      const data = await res.json();
+      
+      if (!res.ok) {
+        throw new Error(data.error || 'Gagal upload gambar');
+      }
+      
+      setProfilePictureUrl(data.url);
       setMessage('Profile picture berhasil diperbarui');
+      
+      // Reload profile to get updated data
+      await loadProfile();
     } catch (e: any) {
-      setError(e.message || 'Gagal update profile picture');
+      setError(e.message || 'Gagal upload profile picture');
     } finally {
-      setLoading(false);
+      setUploading(false);
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      // Validate file size (5MB)
+      if (file.size > 5 * 1024 * 1024) {
+        setError('Ukuran file maksimal 5MB');
+        return;
+      }
+      
+      // Validate file type
+      const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+      if (!allowedTypes.includes(file.type)) {
+        setError('Format file harus JPEG, PNG, GIF, atau WebP');
+        return;
+      }
+      
+      handleUpdateProfilePicture(file);
     }
   };
 
@@ -146,38 +172,30 @@ export default function AccountPage() {
                     </div>
                   )}
                   <button
-                    onClick={() => setEditingPicture(!editingPicture)}
-                    className="absolute bottom-0 right-0 p-2 rounded-full bg-blue-600 text-white hover:bg-blue-700 border-2 border-gray-900"
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploading}
+                    className="absolute bottom-0 right-0 p-2 rounded-full bg-blue-600 text-white hover:bg-blue-700 border-2 border-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Upload foto profil"
                   >
-                    <FiCamera size={16} />
+                    {uploading ? (
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    ) : (
+                      <FiUpload size={16} />
+                    )}
                   </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/jpeg,image/jpg,image/png,image/gif,image/webp"
+                    onChange={handleFileSelect}
+                    className="hidden"
+                  />
                 </div>
-                {editingPicture && (
-                  <div className="w-full max-w-xs">
-                    <input
-                      type="url"
-                      value={newProfilePicUrl}
-                      onChange={(e) => setNewProfilePicUrl(e.target.value)}
-                      placeholder="https://example.com/image.jpg"
-                      className="w-full px-3 py-2 rounded-lg border border-white/10 bg-white/5 text-white text-sm mb-2"
-                    />
-                    <div className="flex gap-2">
-                      <button
-                        onClick={handleUpdateProfilePicture}
-                        disabled={loading}
-                        className="flex-1 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-50"
-                      >
-                        Simpan
-                      </button>
-                      <button
-                        onClick={() => { setEditingPicture(false); setNewProfilePicUrl(''); }}
-                        className="flex-1 px-3 py-1.5 rounded-lg border border-white/10 text-white text-sm hover:bg-white/5"
-                      >
-                        Batal
-                      </button>
-                    </div>
-                  </div>
-                )}
+                <p className="text-xs text-white/40 text-center max-w-[200px]">
+                  Klik icon untuk upload foto<br/>
+                  Max 5MB (JPG, PNG, GIF, WebP)
+                </p>
               </div>
 
               {/* Basic Info */}
