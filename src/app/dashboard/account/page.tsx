@@ -2,13 +2,19 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { FiLock, FiEye, FiEyeOff, FiCheckCircle, FiAlertCircle } from "react-icons/fi";
+import { FiLock, FiEye, FiEyeOff, FiCheckCircle, FiAlertCircle, FiUser, FiCamera, FiTrendingUp } from "react-icons/fi";
+import { SiTiktok, SiInstagram } from "react-icons/si";
 import { format, parseISO } from 'date-fns';
 import { id as localeID } from 'date-fns/locale';
 
 export default function AccountPage() {
   const supabase = createClient();
   const [email, setEmail] = useState<string>("");
+  const [fullName, setFullName] = useState<string>("");
+  const [username, setUsername] = useState<string>("");
+  const [profilePictureUrl, setProfilePictureUrl] = useState<string>("");
+  const [newProfilePicUrl, setNewProfilePicUrl] = useState<string>("");
+  const [editingPicture, setEditingPicture] = useState(false);
   const [nextPwd, setNextPwd] = useState("");
   const [confirm, setConfirm] = useState("");
   const [showNew, setShowNew] = useState(false);
@@ -17,18 +23,33 @@ export default function AccountPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [myGroups, setMyGroups] = useState<Array<{id:string;name:string;start_date?:string|null;end_date?:string|null}>>([]);
+  const [metrics, setMetrics] = useState<any>(null);
+  const [tiktokUsernames, setTiktokUsernames] = useState<string[]>([]);
+  const [instagramUsernames, setInstagramUsernames] = useState<string[]>([]);
 
   useEffect(() => {
-    (async () => {
+    loadProfile();
+  }, []);
+
+  const loadProfile = async () => {
+    try {
       const { data: { user } } = await supabase.auth.getUser();
       if (user?.email) setEmail(user.email);
-      try {
-        const r = await fetch('/api/employee/groups', { cache: 'no-store' });
-        const j = await r.json();
-        if (r.ok) setMyGroups(j.groups || []);
-      } catch {}
-    })();
-  }, []);
+      
+      // Load complete profile with metrics
+      const r = await fetch('/api/employee/profile', { cache: 'no-store' });
+      const j = await r.json();
+      if (r.ok) {
+        setFullName(j.profile?.full_name || '');
+        setUsername(j.profile?.username || '');
+        setProfilePictureUrl(j.profile?.profile_picture_url || '');
+        setTiktokUsernames(j.profile?.tiktok_usernames || []);
+        setInstagramUsernames(j.profile?.instagram_usernames || []);
+        setMetrics(j.metrics);
+        setMyGroups(j.groups || []);
+      }
+    } catch {}
+  };
 
   const strength = useMemo(() => {
     const s = nextPwd;
@@ -61,24 +82,271 @@ export default function AccountPage() {
     }
   };
 
+  const handleUpdateProfilePicture = async () => {
+    if (!newProfilePicUrl.trim()) {
+      setError("URL gambar tidak boleh kosong");
+      return;
+    }
+    setLoading(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const res = await fetch('/api/employee/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profile_picture_url: newProfilePicUrl.trim() }),
+      });
+      if (!res.ok) throw new Error('Gagal update profile picture');
+      setProfilePictureUrl(newProfilePicUrl.trim());
+      setNewProfilePicUrl('');
+      setEditingPicture(false);
+      setMessage('Profile picture berhasil diperbarui');
+    } catch (e: any) {
+      setError(e.message || 'Gagal update profile picture');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const formatNumber = (num: number) => {
+    if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
+    if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
+    return num.toString();
+  };
+
   return (
     <div className="min-h-screen p-4 md:p-8">
-      <div className="max-w-2xl mx-auto">
-      <div className="flex items-center gap-3 mb-6">
-        <div className="p-2 rounded-xl bg-blue-500/15 border border-blue-400/20 text-blue-300">
-          <FiLock size={18} />
+      <div className="max-w-4xl mx-auto">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="p-2 rounded-xl bg-blue-500/15 border border-blue-400/20 text-blue-300">
+            <FiUser size={18} />
+          </div>
+          <h1 className="text-2xl md:text-3xl font-semibold tracking-tight bg-gradient-to-r from-blue-600 to-sky-500 dark:from-white dark:to-white/70 bg-clip-text text-transparent">Profil Saya</h1>
         </div>
-        <h1 className="text-2xl md:text-3xl font-semibold tracking-tight bg-gradient-to-r from-blue-600 to-sky-500 dark:from-white dark:to-white/70 bg-clip-text text-transparent">Akun</h1>
-      </div>
 
-      <div className="glass rounded-2xl border border-white/10 max-w-2xl mx-auto overflow-hidden">
-        <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between">
-          <div>
-            <h2 className="text-white font-medium">Ubah Password</h2>
-            <p className="text-white/60 text-xs">Pastikan password kuat dan unik.</p>
+        {/* Profile Picture & Basic Info */}
+        <div className="glass rounded-2xl border border-white/10 mb-6 overflow-hidden">
+          <div className="px-5 py-4 border-b border-white/10">
+            <h2 className="text-white font-medium">Informasi Profil</h2>
+          </div>
+          <div className="p-5">
+            <div className="flex flex-col md:flex-row gap-6 items-start">
+              {/* Profile Picture */}
+              <div className="flex flex-col items-center gap-3">
+                <div className="relative">
+                  {profilePictureUrl ? (
+                    <img 
+                      src={profilePictureUrl} 
+                      alt="Profile" 
+                      className="w-32 h-32 rounded-full object-cover border-2 border-white/20"
+                    />
+                  ) : (
+                    <div className="w-32 h-32 rounded-full bg-gradient-to-br from-blue-500 to-sky-500 flex items-center justify-center border-2 border-white/20">
+                      <FiUser size={48} className="text-white" />
+                    </div>
+                  )}
+                  <button
+                    onClick={() => setEditingPicture(!editingPicture)}
+                    className="absolute bottom-0 right-0 p-2 rounded-full bg-blue-600 text-white hover:bg-blue-700 border-2 border-gray-900"
+                  >
+                    <FiCamera size={16} />
+                  </button>
+                </div>
+                {editingPicture && (
+                  <div className="w-full max-w-xs">
+                    <input
+                      type="url"
+                      value={newProfilePicUrl}
+                      onChange={(e) => setNewProfilePicUrl(e.target.value)}
+                      placeholder="https://example.com/image.jpg"
+                      className="w-full px-3 py-2 rounded-lg border border-white/10 bg-white/5 text-white text-sm mb-2"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleUpdateProfilePicture}
+                        disabled={loading}
+                        className="flex-1 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-50"
+                      >
+                        Simpan
+                      </button>
+                      <button
+                        onClick={() => { setEditingPicture(false); setNewProfilePicUrl(''); }}
+                        className="flex-1 px-3 py-1.5 rounded-lg border border-white/10 text-white text-sm hover:bg-white/5"
+                      >
+                        Batal
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Basic Info */}
+              <div className="flex-1">
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-sm text-white/60 mb-1">Nama Lengkap</label>
+                    <div className="text-white font-medium">{fullName || '-'}</div>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-white/60 mb-1">Username</label>
+                    <div className="text-white">@{username || '-'}</div>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-white/60 mb-1">Email</label>
+                    <div className="text-white">{email || '-'}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Social Media Accounts */}
+            <div className="mt-6 pt-6 border-t border-white/10">
+              <h3 className="text-white font-medium mb-3">Akun Media Sosial</h3>
+              <div className="grid md:grid-cols-2 gap-4">
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <SiTiktok className="text-white" size={16} />
+                    <span className="text-sm text-white/70">TikTok</span>
+                  </div>
+                  {tiktokUsernames.length > 0 ? (
+                    <div className="space-y-1">
+                      {tiktokUsernames.map((username, i) => (
+                        <div key={i} className="text-white text-sm">@{username}</div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-white/40 text-sm">Belum ada akun</div>
+                  )}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <SiInstagram className="text-white" size={16} />
+                    <span className="text-sm text-white/70">Instagram</span>
+                  </div>
+                  {instagramUsernames.length > 0 ? (
+                    <div className="space-y-1">
+                      {instagramUsernames.map((username, i) => (
+                        <div key={i} className="text-white text-sm">@{username}</div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-white/40 text-sm">Belum ada akun</div>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-        <div className="p-5">
+
+        {/* Total Metrics */}
+        {metrics && (
+          <div className="glass rounded-2xl border border-white/10 mb-6 overflow-hidden">
+            <div className="px-5 py-4 border-b border-white/10 flex items-center gap-2">
+              <FiTrendingUp className="text-blue-400" />
+              <h2 className="text-white font-medium">Total Performa</h2>
+            </div>
+            <div className="p-5">
+              {/* Combined Totals */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                <div className="p-4 rounded-xl bg-gradient-to-br from-blue-500/10 to-sky-500/10 border border-blue-400/20">
+                  <div className="text-xs text-white/60 mb-1">Total Views</div>
+                  <div className="text-2xl font-bold text-white">{formatNumber(metrics.total_views)}</div>
+                </div>
+                <div className="p-4 rounded-xl bg-gradient-to-br from-pink-500/10 to-rose-500/10 border border-pink-400/20">
+                  <div className="text-xs text-white/60 mb-1">Total Likes</div>
+                  <div className="text-2xl font-bold text-white">{formatNumber(metrics.total_likes)}</div>
+                </div>
+                <div className="p-4 rounded-xl bg-gradient-to-br from-purple-500/10 to-violet-500/10 border border-purple-400/20">
+                  <div className="text-xs text-white/60 mb-1">Total Comments</div>
+                  <div className="text-2xl font-bold text-white">{formatNumber(metrics.total_comments)}</div>
+                </div>
+                <div className="p-4 rounded-xl bg-gradient-to-br from-green-500/10 to-emerald-500/10 border border-green-400/20">
+                  <div className="text-xs text-white/60 mb-1">Total Shares</div>
+                  <div className="text-2xl font-bold text-white">{formatNumber(metrics.total_shares)}</div>
+                </div>
+              </div>
+
+              {/* Platform Breakdown */}
+              <div className="grid md:grid-cols-2 gap-6">
+                {/* TikTok */}
+                <div className="p-4 rounded-xl border border-white/10 bg-white/5">
+                  <div className="flex items-center gap-2 mb-3">
+                    <SiTiktok className="text-white" size={20} />
+                    <h3 className="text-white font-medium">TikTok</h3>
+                  </div>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-white/60">Views</span>
+                      <span className="text-white font-medium">{formatNumber(metrics.tiktok_views)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-white/60">Likes</span>
+                      <span className="text-white font-medium">{formatNumber(metrics.tiktok_likes)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-white/60">Comments</span>
+                      <span className="text-white font-medium">{formatNumber(metrics.tiktok_comments)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-white/60">Shares</span>
+                      <span className="text-white font-medium">{formatNumber(metrics.tiktok_shares)}</span>
+                    </div>
+                    <div className="flex justify-between pt-2 border-t border-white/10">
+                      <span className="text-white/60">Followers</span>
+                      <span className="text-white font-medium">{formatNumber(metrics.tiktok_followers)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Instagram */}
+                <div className="p-4 rounded-xl border border-white/10 bg-white/5">
+                  <div className="flex items-center gap-2 mb-3">
+                    <SiInstagram className="text-white" size={20} />
+                    <h3 className="text-white font-medium">Instagram</h3>
+                  </div>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-white/60">Views</span>
+                      <span className="text-white font-medium">{formatNumber(metrics.instagram_views)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-white/60">Likes</span>
+                      <span className="text-white font-medium">{formatNumber(metrics.instagram_likes)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-white/60">Comments</span>
+                      <span className="text-white font-medium">{formatNumber(metrics.instagram_comments)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-white/60">Shares</span>
+                      <span className="text-white font-medium">{formatNumber(metrics.instagram_shares)}</span>
+                    </div>
+                    <div className="flex justify-between pt-2 border-t border-white/10">
+                      <span className="text-white/60">Followers</span>
+                      <span className="text-white font-medium">{formatNumber(metrics.instagram_followers)}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {metrics.last_updated && (
+                <div className="mt-4 text-xs text-white/40 text-center">
+                  Terakhir diperbarui: {format(parseISO(metrics.last_updated), 'd MMM yyyy HH:mm', { locale: localeID })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Change Password */}
+        <div className="glass rounded-2xl border border-white/10 mb-6 overflow-hidden">
+          <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between">
+            <div>
+              <h2 className="text-white font-medium">Ubah Password</h2>
+              <p className="text-white/60 text-xs">Pastikan password kuat dan unik.</p>
+            </div>
+          </div>
+          <div className="p-5"
           {message && (
             <div className="mb-4 flex items-center gap-2 text-green-300 bg-green-500/10 border border-green-500/30 rounded-lg p-3">
               <FiCheckCircle /> <span>{message}</span>
@@ -133,8 +401,9 @@ export default function AccountPage() {
           </form>
         </div>
       </div>
+
       {/* My Groups */}
-      <div className="glass rounded-2xl border border-white/10 max-w-2xl mx-auto overflow-hidden mt-6">
+      <div className="glass rounded-2xl border border-white/10 overflow-hidden">
         <div className="px-5 py-4 border-b border-white/10"><h2 className="text-white font-medium">Group Saya</h2></div>
         <div className="p-5">
           {myGroups.length === 0 ? (
@@ -156,7 +425,6 @@ export default function AccountPage() {
           )}
         </div>
       </div>
-      <p className="mt-4 text-xs text-white/50 max-w-2xl mx-auto">Catatan: Password disimpan aman di Supabase Auth dan tidak terlihat oleh admin. Admin hanya bisa mereset password Anda, bukan melihat isinya.</p>
       </div>
     </div>
   );
