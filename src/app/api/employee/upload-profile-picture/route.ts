@@ -69,10 +69,13 @@ export async function POST(req: Request) {
       .getPublicUrl(filePath);
 
     // Update user profile with new picture URL
-    const { error: updateError } = await supabase
+    const { data: updateData, error: updateError } = await supabase
       .from('users')
       .update({ profile_picture_url: publicUrl })
-      .eq('id', user.id);
+      .eq('id', user.id)
+      .select();
+
+    console.log('Update attempt:', { userId: user.id, publicUrl, updateData, updateError });
 
     if (updateError) {
       console.error('Profile update error:', updateError);
