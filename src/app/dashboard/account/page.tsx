@@ -384,7 +384,7 @@ export default function AccountPage() {
               <div>
                 <label className="block text-sm text-white/70 mb-1">Password baru</label>
                 <div className="relative">
-                  <input type={showNew?"text":"password"} value={nextPwd} onChange={(e)=>setNextPwd(e.target.value)} className="w-full pr-10 px-3 py-2 rounded-xl border border-white/10 bg-white/5 text-white" required minLength={6} placeholder="Minimal 6 karakter" />
+                  <input type={showNew?"text":"password"} value={nextPwd} onChange={(e)=>setNextPwd(e.target.value)} className="w-full pr-10 px-3 py-2 rounded-xl border border-white/10 bg-white/5 text-white" minLength={6} placeholder="Minimal 6 karakter" />
                   <button type="button" onClick={()=>setShowNew(v=>!v)} className="absolute right-2 top-1/2 -translate-y-1/2 text-white/60 hover:text-white">
                     {showNew ? <FiEyeOff /> : <FiEye />}
                   </button>
@@ -401,7 +401,7 @@ export default function AccountPage() {
               <div className="sm:col-span-2">
                 <label className="block text-sm text-white/70 mb-1">Konfirmasi password baru</label>
                 <div className="relative">
-                  <input type={showConf?"text":"password"} value={confirm} onChange={(e)=>setConfirm(e.target.value)} className="w-full pr-10 px-3 py-2 rounded-xl border border-white/10 bg-white/5 text-white" required minLength={6} placeholder="Ulangi password baru" />
+                  <input type={showConf?"text":"password"} value={confirm} onChange={(e)=>setConfirm(e.target.value)} className="w-full pr-10 px-3 py-2 rounded-xl border border-white/10 bg-white/5 text-white" minLength={6} placeholder="Ulangi password baru" />
                   <button type="button" onClick={()=>setShowConf(v=>!v)} className="absolute right-2 top-1/2 -translate-y-1/2 text-white/60 hover:text-white">
                     {showConf ? <FiEyeOff /> : <FiEye />}
                   </button>
@@ -412,8 +412,8 @@ export default function AccountPage() {
               </div>
             </div>
             <div className="pt-2 flex justify-end">
-              <button type="submit" disabled={loading} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-sky-500 text-white disabled:opacity-60">
-                {loading && <span className="w-3.5 h-3.5 rounded-full border-2 border-white/40 border-t-white animate-spin" />}<span>Simpan</span>
+              <button type="submit" disabled={loading || !nextPwd || !confirm} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-sky-500 text-white disabled:opacity-60">
+                {loading && <span className="w-3.5 h-3.5 rounded-full border-2 border-white/40 border-t-white animate-spin" />}<span>Ubah Password</span>
               </button>
             </div>
           </form>
