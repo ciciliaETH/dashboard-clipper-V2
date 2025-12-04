@@ -1,0 +1,16 @@
+name: Accrual Backfill (6h)
+on:
+  schedule:
+    - cron: "0 */6 * * *"   # setiap 6 jam
+  workflow_dispatch: {}
+
+jobs:
+  accrual-backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run accrual_backfill (days=28)
+        run: |
+          curl -sS -X GET \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
+            -H "Content-Type: application/json" \
+            "${{ secrets.SUPABASE_EDGE_URL }}/functions/v1/accrual_backfill?days=28"
