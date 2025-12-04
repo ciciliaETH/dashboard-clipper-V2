@@ -11,28 +11,29 @@ ALTER TABLE public.users
 -- 2. Create materialized view for employee total metrics (TikTok + Instagram combined)
 CREATE MATERIALIZED VIEW IF NOT EXISTS public.employee_total_metrics AS
 WITH tiktok_totals AS (
-  -- Aggregate TikTok metrics from campaign_participants (already has totals per username)
+  -- Aggregate TikTok metrics from tiktok_posts_daily
   SELECT 
-    cp.user_id,
-    SUM(COALESCE(cp.views, 0)) as tiktok_views,
-    SUM(COALESCE(cp.likes, 0)) as tiktok_likes,
-    SUM(COALESCE(cp.comments, 0)) as tiktok_comments,
-    SUM(COALESCE(cp.shares, 0)) as tiktok_shares,
-    SUM(COALESCE(cp.followers, 0)) as tiktok_followers,
-    MAX(cp.last_refreshed) as tiktok_last_updated
-  FROM public.campaign_participants cp
-  WHERE cp.user_id IS NOT NULL
-  GROUP BY cp.user_id
+    etp.employee_id as user_id,
+    SUM(COALESCE(tpd.play_count, 0)) as tiktok_views,
+    SUM(COALESCE(tpd.digg_count, 0)) as tiktok_likes,
+    SUM(COALESCE(tpd.comment_count, 0)) as tiktok_comments,
+    SUM(COALESCE(tpd.share_count, 0)) as tiktok_shares,
+    0 as tiktok_followers,
+    MAX(tpd.created_at) as tiktok_last_updated
+  FROM public.employee_participants etp
+  JOIN public.tiktok_posts_daily tpd 
+    ON LOWER(etp.tiktok_username) = LOWER(tpd.username)
+  GROUP BY etp.employee_id
 ),
 instagram_totals AS (
-  -- Aggregate Instagram metrics via employee_instagram_participants + instagram_posts_daily
+  -- Aggregate Instagram metrics from instagram_posts_daily
   SELECT
     eip.employee_id as user_id,
     SUM(COALESCE(ipd.play_count, 0)) as instagram_views,
     SUM(COALESCE(ipd.like_count, 0)) as instagram_likes,
     SUM(COALESCE(ipd.comment_count, 0)) as instagram_comments,
-    SUM(COALESCE(ipd.share_count, 0)) as instagram_shares,
-    0 as instagram_followers, -- followers tracked separately
+    0 as instagram_shares,
+    0 as instagram_followers,
     MAX(ipd.created_at) as instagram_last_updated
   FROM public.employee_instagram_participants eip
   JOIN public.instagram_posts_daily ipd 
