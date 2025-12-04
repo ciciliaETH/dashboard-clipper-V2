@@ -71,9 +71,9 @@ async function refreshHandler(req: Request) {
   const body = isPost ? await req.json().catch(() => ({})) : {};
   
   const batchSize = Math.max(1, Math.min(100, Number(body?.batch_size || 1)));
-  // Conservative delay for 100% reliability and ZERO data loss
-  // Pro plan: 1 req/sec per key, set 3s delay for safety margin
-  const delayMs = Math.max(0, Math.min(30000, Number(body?.delay_ms || 3000))); // Default 3 seconds
+  // GUARANTEED ZERO RATE LIMITS: 8 seconds delay (8x slower than limit)
+  // Pro plan: 1 req/sec, with 8s delay = absolutely safe
+  const delayMs = Math.max(0, Math.min(30000, Number(body?.delay_ms || 8000))); // Default 8 seconds
   const limit = Math.max(1, Math.min(10000, Number(body?.limit || 1000)));
   const onlyWithUserId = body?.only_with_user_id === true; // default FALSE - fetch all usernames
   

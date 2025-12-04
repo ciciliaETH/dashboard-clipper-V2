@@ -78,9 +78,9 @@ async function refreshHandler(req: Request) {
   const isPost = req.method === 'POST';
   const body = isPost ? await req.json().catch(() => ({})) : {};
   
-  // Conservative delay for 100% reliability and ZERO data loss
-  // Pro plan: 1 req/sec per key, set 5s delay for safety margin
-  const delayMs = Math.max(0, Math.min(30000, Number(body?.delay_ms || 5000))); // Default 5 seconds
+  // GUARANTEED ZERO RATE LIMITS: 10 seconds delay (10x slower than limit)
+  // Pro plan: 1 req/sec, with 10s delay = absolutely safe
+  const delayMs = Math.max(0, Math.min(30000, Number(body?.delay_ms || 10000))); // Default 10 seconds
   const limit = Math.max(1, Math.min(10000, Number(body?.limit || 1000)));
   
   // Get base URL for fetch-metrics endpoint
