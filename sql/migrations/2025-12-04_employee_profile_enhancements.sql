@@ -25,19 +25,18 @@ WITH tiktok_totals AS (
   GROUP BY cp.user_id
 ),
 instagram_totals AS (
-  -- Aggregate Instagram metrics via employee_instagram_participants mapping
+  -- Aggregate Instagram metrics via employee_instagram_participants + instagram_posts_daily
   SELECT
     eip.employee_id as user_id,
-    SUM(COALESCE(cip.views, 0)) as instagram_views,
-    SUM(COALESCE(cip.likes, 0)) as instagram_likes,
-    SUM(COALESCE(cip.comments, 0)) as instagram_comments,
-    SUM(COALESCE(cip.shares, 0)) as instagram_shares,
-    SUM(COALESCE(cip.followers, 0)) as instagram_followers,
-    MAX(cip.last_refreshed) as instagram_last_updated
+    SUM(COALESCE(ipd.play_count, 0)) as instagram_views,
+    SUM(COALESCE(ipd.like_count, 0)) as instagram_likes,
+    SUM(COALESCE(ipd.comment_count, 0)) as instagram_comments,
+    SUM(COALESCE(ipd.share_count, 0)) as instagram_shares,
+    0 as instagram_followers, -- followers tracked separately
+    MAX(ipd.created_at) as instagram_last_updated
   FROM public.employee_instagram_participants eip
-  JOIN public.campaign_instagram_participants cip 
-    ON eip.instagram_username = cip.instagram_username 
-    AND eip.campaign_id = cip.campaign_id
+  JOIN public.instagram_posts_daily ipd 
+    ON LOWER(eip.instagram_username) = LOWER(ipd.username)
   GROUP BY eip.employee_id
 ),
 employee_usernames AS (
