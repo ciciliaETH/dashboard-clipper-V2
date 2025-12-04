@@ -82,20 +82,39 @@ export async function GET(req: Request) {
 
     // === TIKTOK VIDEOS ===
     if (platform === 'all' || platform === 'tiktok') {
-      // Get TikTok usernames for employees
-      const tiktokUsernames = Array.from(new Set(
-        (users || [])
-          .map((u: any) => u.tiktok_username)
-          .filter(Boolean)
-          .map((u: string) => u.toLowerCase().replace(/^@+/, ''))
-      ))
+      // Get TikTok usernames ONLY from employees in THIS campaign who are not hidden
+      const tiktokUsernames: string[] = []
+      
+      // From users table (main tiktok_username)
+      for (const u of users || []) {
+        if (u.tiktok_username) {
+          tiktokUsernames.push(u.tiktok_username.toLowerCase().replace(/^@+/, ''))
+        }
+      }
+      
+      // From employee_participants - MUST be for THIS campaign AND employee must be visible
+      const { data: ttParticipants } = await supabase
+        .from('employee_participants')
+        .select('employee_id, tiktok_username')
+        .eq('campaign_id', campaignId)
+        .in('employee_id', employeeIds)
+      
+      for (const p of ttParticipants || []) {
+        // Only include if employee is visible (exists in userMap)
+        const employeeInfo = userMap.get(p.employee_id)
+        if (employeeInfo && p.tiktok_username) {
+          tiktokUsernames.push(p.tiktok_username.toLowerCase().replace(/^@+/, ''))
+        }
+      }
+      
+      const uniqueTikTokUsernames = Array.from(new Set(tiktokUsernames))
 
-      if (tiktokUsernames.length > 0) {
+      if (uniqueTikTokUsernames.length > 0) {
         // Query tiktok_posts_daily for videos in window
         const { data: tiktokPosts } = await supabase
           .from('tiktok_posts_daily')
           .select('video_id, username, post_date, title, play_count, digg_count, comment_count, share_count, save_count')
-          .in('username', tiktokUsernames)
+          .in('username', uniqueTikTokUsernames)
           .gte('post_date', startISO)
           .lte('post_date', endISO)
           .order('play_count', { ascending: false })
@@ -174,22 +193,25 @@ export async function GET(req: Request) {
 
     // === INSTAGRAM VIDEOS ===
     if (platform === 'all' || platform === 'instagram') {
-      // Get Instagram usernames for employees
-      const instagramUsernames = Array.from(new Set(
-        (users || [])
-          .map((u: any) => u.instagram_username)
-          .filter(Boolean)
-          .map((u: string) => u.toLowerCase().replace(/^@+/, ''))
-      ))
+      // Get Instagram usernames ONLY from employees in THIS campaign who are not hidden
+      const instagramUsernames: string[] = []
+      
+      // From users table (main instagram_username)
+      for (const u of users || []) {
+        if (u.instagram_username) {
+          instagramUsernames.push(u.instagram_username.toLowerCase().replace(/^@+/, ''))
+        }
+      }
 
-      // Also get from employee_instagram_participants
+      // From employee_instagram_participants - MUST be for THIS campaign AND employee must be visible
       const { data: igParticipants } = await supabase
         .from('employee_instagram_participants')
         .select('employee_id, instagram_username')
+        .eq('campaign_id', campaignId)
         .in('employee_id', employeeIds)
       
       for (const p of igParticipants || []) {
-        // Only include if employee is not hidden
+        // Only include if employee is visible (exists in userMap)
         const employeeInfo = userMap.get(p.employee_id)
         if (employeeInfo && p.instagram_username) {
           instagramUsernames.push(p.instagram_username.toLowerCase().replace(/^@+/, ''))
