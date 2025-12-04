@@ -66,7 +66,7 @@ export async function GET(req: Request) {
       // Build employee → handles map (TikTok + Instagram)
       const { data: empUsers } = await supa
         .from('users')
-        .select('id, full_name, username, tiktok_username, instagram_username')
+        .select('id, full_name, username, tiktok_username, instagram_username, profile_picture_url')
         .eq('role','karyawan');
       const empIds = (empUsers||[]).map((u:any)=>u.id);
 
@@ -150,10 +150,11 @@ export async function GET(req: Request) {
       }
 
       // Reduce per employee
-      const result: Array<{ username:string; views:number; likes:number; comments:number; shares:number; saves:number; posts:number; total:number }>= [];
+      const result: Array<{ username:string; profile_picture_url:string|null; views:number; likes:number; comments:number; shares:number; saves:number; posts:number; total:number }>= [];
       for (const u of empUsers || []) {
         const id = String((u as any).id);
         const label = String((u as any).full_name || (u as any).username || (u as any).tiktok_username || (u as any).instagram_username || id);
+        const profilePic = (u as any).profile_picture_url || null;
         const ttHandles = handlesTT.get(id) || [];
         const igHandles = handlesIG.get(id) || [];
         let v=0,l=0,c=0,s=0,sv=0,p=0;
@@ -167,7 +168,7 @@ export async function GET(req: Request) {
         }
         const total = v + l + c + s + sv;
         if (total > 0) {
-          result.push({ username: label, views: v, likes: l, comments: c, shares: s, saves: sv, posts: p, total });
+          result.push({ username: label, profile_picture_url: profilePic, views: v, likes: l, comments: c, shares: s, saves: sv, posts: p, total });
         }
       }
 

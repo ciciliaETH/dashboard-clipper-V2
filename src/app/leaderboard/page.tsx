@@ -2,9 +2,11 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import TopViralVideos from '@/components/TopViralVideos';
+import EmployeeAvatar from '@/components/EmployeeAvatar';
 
 type Row = {
   username: string;
+  profile_picture_url?: string | null;
   views: number;
   likes: number;
   comments: number;
@@ -151,7 +153,10 @@ export default function LeaderboardPage() {
                           <div className={`${rankCls} text-5xl sm:text-6xl md:text-7xl`}>{i+1}</div>
                         </div>
                         <div className="text-center">
-                          <div className="text-xs sm:text-sm text-white/70">{r.username}</div>
+                          <div className="flex flex-col items-center gap-2 mb-2">
+                            <EmployeeAvatar profilePictureUrl={r.profile_picture_url} username={r.username} size="lg" />
+                            <div className="text-xs sm:text-sm text-white/70">{r.username}</div>
+                          </div>
                           {typeof prize === 'number' && (
                             <div className="mt-2 inline-flex items-center gap-2 px-2.5 py-1 rounded-full border border-white/10 bg-white/5 text-white/90">
                               <span className="text-[11px] sm:text-xs">Prize</span>
@@ -199,7 +204,12 @@ export default function LeaderboardPage() {
                 {rest.map((r, i) => (
                   <tr key={r.username} className="border-t border-white/10 hover:bg-white/5">
                     <td className="py-2 px-4 text-white/60">{i+4}</td>
-                    <td className="py-2 px-4 text-white/90">{r.username}</td>
+                    <td className="py-2 px-4">
+                      <div className="flex items-center gap-3">
+                        <EmployeeAvatar profilePictureUrl={r.profile_picture_url} username={r.username} size="sm" />
+                        <span className="text-white/90">{r.username}</span>
+                      </div>
+                    </td>
                     <td className="py-2 px-4 text-white/80">{format(r.views)}</td>
                     <td className="py-2 px-4 text-white/80">{format(r.likes)}</td>
                     <td className="py-2 px-4 text-white/80">{format(r.comments)}</td>

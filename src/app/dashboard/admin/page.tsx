@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { User } from '@/types';
 import { FaEdit, FaTrash, FaPlus, FaTimes } from 'react-icons/fa';
+import EmployeeAvatar from '@/components/EmployeeAvatar';
 
 export default function AdminPage() {
   const supabase = createClient();
@@ -680,6 +681,7 @@ export default function AdminPage() {
         <table className="min-w-full">
           <thead>
             <tr className="text-left text-xs uppercase tracking-wider text-white/60">
+              <th className="px-6 py-3">Foto</th>
               <th className="px-6 py-3">Nama Lengkap</th>
               <th className="px-6 py-3">Username</th>
               <th className="px-6 py-3">TikTok Usernames</th>
@@ -691,6 +693,9 @@ export default function AdminPage() {
           <tbody>
             {users.filter(u => !searchName || String(u.full_name||'').toLowerCase().includes(searchName.toLowerCase())).map(user => (
               <tr key={user.id} className="border-t border-white/10 hover:bg-white/5">
+                <td className="px-6 py-4">
+                  <EmployeeAvatar profilePictureUrl={(user as any).profile_picture_url} username={user.username} size="sm" />
+                </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-white/90">{user.full_name}</td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-white/70">{user.username}</td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-white/70">{[user.tiktok_username, ...(((user as any).extra_tiktok_usernames)||[])].filter(Boolean).join(', ') || '-'}</td>
