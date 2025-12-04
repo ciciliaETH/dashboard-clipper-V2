@@ -71,7 +71,8 @@ async function refreshHandler(req: Request) {
   const body = isPost ? await req.json().catch(() => ({})) : {};
   
   const batchSize = Math.max(1, Math.min(100, Number(body?.batch_size || 1)));
-  const delayMs = Math.max(0, Math.min(30000, Number(body?.delay_ms || 5000))); // Default 5 seconds, max 30s
+  // Pro plan: 1 req/sec per key, with 5 keys = safe at 1000-1500ms delay
+  const delayMs = Math.max(0, Math.min(30000, Number(body?.delay_ms || 1500))); // Default 1.5 seconds
   const limit = Math.max(1, Math.min(10000, Number(body?.limit || 1000)));
   const onlyWithUserId = body?.only_with_user_id === true; // default FALSE - fetch all usernames
   
