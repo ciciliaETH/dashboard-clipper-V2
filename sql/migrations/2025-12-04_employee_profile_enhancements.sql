@@ -25,18 +25,20 @@ WITH tiktok_totals AS (
   GROUP BY cp.user_id
 ),
 instagram_totals AS (
-  -- Aggregate Instagram metrics from campaign_instagram_participants
+  -- Aggregate Instagram metrics via employee_instagram_participants mapping
   SELECT
-    cip.user_id,
+    eip.employee_id as user_id,
     SUM(COALESCE(cip.views, 0)) as instagram_views,
     SUM(COALESCE(cip.likes, 0)) as instagram_likes,
     SUM(COALESCE(cip.comments, 0)) as instagram_comments,
     SUM(COALESCE(cip.shares, 0)) as instagram_shares,
     SUM(COALESCE(cip.followers, 0)) as instagram_followers,
     MAX(cip.last_refreshed) as instagram_last_updated
-  FROM public.campaign_instagram_participants cip
-  WHERE cip.user_id IS NOT NULL
-  GROUP BY cip.user_id
+  FROM public.employee_instagram_participants eip
+  JOIN public.campaign_instagram_participants cip 
+    ON eip.instagram_username = cip.instagram_username 
+    AND eip.campaign_id = cip.campaign_id
+  GROUP BY eip.employee_id
 ),
 employee_usernames AS (
   -- Get employee TikTok usernames (from multiple sources)
