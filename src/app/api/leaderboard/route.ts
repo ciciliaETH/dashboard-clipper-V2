@@ -67,7 +67,8 @@ export async function GET(req: Request) {
       const { data: empUsers } = await supa
         .from('users')
         .select('id, full_name, username, tiktok_username, instagram_username, profile_picture_url')
-        .eq('role','karyawan');
+        .eq('role','karyawan')
+        .eq('is_hidden', false);
       const empIds = (empUsers||[]).map((u:any)=>u.id);
 
       const handlesTT = new Map<string, string[]>(); // user_id -> tt handles

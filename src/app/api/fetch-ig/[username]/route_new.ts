@@ -343,7 +343,7 @@ export async function GET(req: Request, context: any) {
       }
       if (!ownerUserId && allowCreateUser) {
         const newId = randomUUID();
-        const { error: upErr } = await supa.from('users').upsert({ id: newId, username: norm, email: `${norm}@example.com`, role: 'umum', instagram_username: norm }, { onConflict: 'id' });
+        const { error: upErr } = await supa.from('users').upsert({ id: newId, username: norm, email: `${norm}@example.com`, role: 'umum', instagram_username: norm, is_hidden: true }, { onConflict: 'id' });
         if (!upErr) ownerUserId = newId;
       }
     } catch {}

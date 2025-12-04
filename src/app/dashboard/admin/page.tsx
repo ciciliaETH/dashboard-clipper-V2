@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { User } from '@/types';
 import { FaEdit, FaTrash, FaPlus, FaTimes } from 'react-icons/fa';
+import { FiEye, FiEyeOff } from 'react-icons/fi';
 import EmployeeAvatar from '@/components/EmployeeAvatar';
 
 export default function AdminPage() {
@@ -28,12 +29,14 @@ export default function AdminPage() {
   const [tikInput, setTikInput] = useState('');
   const [igInput, setIgInput] = useState('');
   const [searchName, setSearchName] = useState('');
+  const [showHidden, setShowHidden] = useState(false);
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch('/api/get-users');
+      const url = showHidden ? '/api/get-users?include_hidden=1' : '/api/get-users';
+      const response = await fetch(url);
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || 'Gagal memuat data Karyawan.');
@@ -46,7 +49,7 @@ export default function AdminPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showHidden]);
 
   useEffect(() => {
     loadUsers();
@@ -208,6 +211,26 @@ export default function AdminPage() {
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setCurrentUser(prev => prev ? { ...prev, [name]: value } : null);
+  };
+
+  const toggleHideUser = async (userId: string, currentHiddenStatus: boolean) => {
+    try {
+      const newStatus = !currentHiddenStatus;
+      const res = await fetch('/api/admin/toggle-hide-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, isHidden: newStatus })
+      });
+      
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Gagal toggle hide user');
+      }
+      
+      await loadUsers();
+    } catch (e: any) {
+      alert(e.message || 'Gagal toggle hide user');
+    }
   };
 
   // Backfill messages / details (used by group backfill)
@@ -670,13 +693,22 @@ export default function AdminPage() {
       {loading && <p className="text-white/60">Memuat...</p>}
 
       <div className="glass rounded-2xl border border-white/10 overflow-x-auto">
-        <div className="p-4 flex items-center gap-3">
+        <div className="p-4 flex items-center justify-between gap-3">
           <input
             value={searchName}
             onChange={(e)=> setSearchName(e.target.value)}
             placeholder="Cari nama lengkap…"
             className="w-full max-w-md px-3 py-2 rounded-xl border border-white/10 bg-white/5 text-white"
           />
+          <label className="flex items-center gap-2 text-sm text-white/70 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showHidden}
+              onChange={(e) => setShowHidden(e.target.checked)}
+              className="rounded border-white/20 bg-white/5 text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
+            />
+            <span>Tampilkan yang dihide</span>
+          </label>
         </div>
         <table className="min-w-full">
           <thead>
@@ -691,12 +723,23 @@ export default function AdminPage() {
             </tr>
           </thead>
           <tbody>
-            {users.filter(u => !searchName || String(u.full_name||'').toLowerCase().includes(searchName.toLowerCase())).map(user => (
-              <tr key={user.id} className="border-t border-white/10 hover:bg-white/5">
+            {users.filter(u => !searchName || String(u.full_name||'').toLowerCase().includes(searchName.toLowerCase())).map(user => {
+              const isHidden = (user as any).is_hidden === true;
+              return (
+              <tr key={user.id} className={`border-t border-white/10 hover:bg-white/5 ${isHidden ? 'opacity-60' : ''}`}>
                 <td className="px-6 py-4">
                   <EmployeeAvatar profilePictureUrl={(user as any).profile_picture_url} username={user.username} size="sm" />
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-white/90">{user.full_name}</td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm">
+                  <div className="flex items-center gap-2">
+                    <span className="text-white/90">{user.full_name}</span>
+                    {isHidden && (
+                      <span className="px-1.5 py-0.5 text-[10px] rounded border border-white/20 text-white/50 bg-white/5">
+                        Hidden
+                      </span>
+                    )}
+                  </div>
+                </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-white/70">{user.username}</td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-white/70">{[user.tiktok_username, ...(((user as any).extra_tiktok_usernames)||[])].filter(Boolean).join(', ') || '-'}</td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-white/70">{[((user as any).instagram_username), ...(((user as any).extra_instagram_usernames)||[])].filter(Boolean).join(', ') || '-'}</td>
@@ -708,6 +751,13 @@ export default function AdminPage() {
                   </span>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                  <button 
+                    onClick={() => toggleHideUser(user.id, isHidden)} 
+                    className="text-gray-300 hover:text-gray-200 mr-4"
+                    title={isHidden ? 'Unhide user' : 'Hide user'}
+                  >
+                    {isHidden ? <FiEyeOff /> : <FiEye />}
+                  </button>
                   <button onClick={() => openModalForEdit(user)} className="text-blue-300 hover:text-blue-200 mr-4">
                     <FaEdit />
                   </button>
@@ -716,7 +766,8 @@ export default function AdminPage() {
                   </button>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>
