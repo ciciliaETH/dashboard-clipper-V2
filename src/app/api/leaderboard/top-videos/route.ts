@@ -67,6 +67,7 @@ export async function GET(req: Request) {
       .from('users')
       .select('id, full_name, username, tiktok_username, instagram_username')
       .in('id', employeeIds)
+      .eq('is_hidden', false)
     
     const userMap = new Map<string, any>()
     for (const u of users || []) {
@@ -184,11 +185,13 @@ export async function GET(req: Request) {
       // Also get from employee_instagram_participants
       const { data: igParticipants } = await supabase
         .from('employee_instagram_participants')
-        .select('instagram_username')
+        .select('employee_id, instagram_username')
         .in('employee_id', employeeIds)
       
       for (const p of igParticipants || []) {
-        if (p.instagram_username) {
+        // Only include if employee is not hidden
+        const employeeInfo = userMap.get(p.employee_id)
+        if (employeeInfo && p.instagram_username) {
           instagramUsernames.push(p.instagram_username.toLowerCase().replace(/^@+/, ''))
         }
       }
