@@ -746,13 +746,49 @@ export async function GET(request: Request, context: any) {
       return NextResponse.json({ tiktok: { ...totals, followers }, page: { hasMore, nextCursor }, source: 'external' });
     } // End of pageMode block
     
-    // Source selection
+    // Source selection - HYBRID MODE: Aggregator PRIMARY, RapidAPI FALLBACK
     let videos: any[] = [];
     let telemetry: any = undefined;
     const FORCE_RAPID = rapidParam === '1';
-    const useRapidCursor = FORCE_RAPID || RAPID_CURSOR_ON;
+    const AGG_BASE = process.env.AGGREGATOR_BASE;
+    const useAggregator = AGG_BASE && !FORCE_RAPID; // Aggregator available and not forced to RapidAPI
+    
+    if (useAggregator) {
+      // PRIMARY: Try aggregator first (proven stable)
+      console.log(`[TikTok Fetch] ${normalized}: Trying AGGREGATOR (primary)...`);
+      try {
+        const aggUrl = `${AGG_BASE}/tiktok/user/${encodeURIComponent(normalized)}`;
+        const aggTimeout = 30000; // 30s timeout
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), aggTimeout);
+        
+        const res = await fetch(aggUrl, { signal: controller.signal });
+        clearTimeout(timer);
+        
+        if (res.ok) {
+          const data = await res.json();
+          const aggVideos = data?.videos || data?.items || [];
+          
+          if (aggVideos.length > 0) {
+            videos = aggVideos;
+            telemetry = { mode: 'aggregator', username: normalized, source: AGG_BASE, videos_count: aggVideos.length };
+            console.log(`[TikTok Fetch] ${normalized}: Aggregator SUCCESS - ${aggVideos.length} videos`);
+          } else {
+            console.warn(`[TikTok Fetch] ${normalized}: Aggregator returned 0 videos, trying RapidAPI fallback...`);
+          }
+        } else {
+          console.warn(`[TikTok Fetch] ${normalized}: Aggregator failed (${res.status}), trying RapidAPI fallback...`);
+        }
+      } catch (err: any) {
+        console.warn(`[TikTok Fetch] ${normalized}: Aggregator error (${err.message}), trying RapidAPI fallback...`);
+      }
+    }
+    
+    // FALLBACK: If aggregator failed or returned 0 videos, use RapidAPI
+    const useRapidCursor = FORCE_RAPID || RAPID_CURSOR_ON || videos.length === 0;
     const providerOverride = providerParam === 'api15' || providerParam === 'fast' ? providerParam : undefined;
-    if (useRapidCursor) {
+    
+    if (useRapidCursor && videos.length === 0) {
       // Backfill mode: choose RapidAPI provider
       const provider = providerOverride || RAPID_PROVIDER;
       if (provider === 'api15') {
