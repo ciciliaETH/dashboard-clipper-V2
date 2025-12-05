@@ -30,7 +30,7 @@ interface FetchResult {
   duration_ms?: number;
 }
 
-async function fetchInstagramData(username: string, baseUrl: string, timeout = 45000): Promise<FetchResult> {
+async function fetchInstagramData(username: string, baseUrl: string, timeout = 120000): Promise<FetchResult> {
   const start = Date.now();
   try {
     const url = `${baseUrl}/api/fetch-ig/${encodeURIComponent(username)}?create=1&allow_username=0`;

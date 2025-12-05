@@ -36,7 +36,7 @@ async function fetchTikTokData(
   startDate: string,
   endDate: string,
   baseUrl: string, 
-  timeout = 60000
+  timeout = 120000
 ): Promise<FetchResult> {
   const start = Date.now();
   try {

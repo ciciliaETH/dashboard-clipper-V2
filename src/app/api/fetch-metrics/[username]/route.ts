@@ -533,34 +533,84 @@ export async function GET(request: Request, context: any) {
     while (hasMore && page < RAPID_CURSOR_MAX_ITER) {
       page += 1;
       const url = new URL(`https://${host}/user/posts`);
-      // username tanpa '@' untuk tiktok-scraper7
-      url.searchParams.set('username', normalized);
+      // unique_id dengan '@' untuk tiktok-scraper7
+      url.searchParams.set('unique_id', normalized);
       url.searchParams.set('count', String(count));
       if (cursor !== null && cursor !== undefined) url.searchParams.set('cursor', String(cursor));
 
       let j: any = null;
+      let statusCode = 200;
       try {
         j = await rapidApiRequest<any>({ url: url.toString(), method: 'GET', rapidApiHost: host, timeoutMs: 20000, maxPerKeyRetries: 1 });
-      } catch {
+        // Check scraper7 response code
+        if (j?.code !== 0) {
+          console.error(`[scraper7] Error code ${j?.code}: ${j?.msg || 'Unknown error'} for ${normalized}`);
+          statusCode = 500;
+          pageSummaries.push({ page, count: 0, cursor: String(cursor ?? ''), has_more: false, status: statusCode });
+          break;
+        }
+      } catch (err) {
+        console.error(`[scraper7] Request failed for ${normalized}:`, err);
         pageSummaries.push({ page, count: 0, cursor: String(cursor ?? ''), has_more: false, status: 500 });
         break;
       }
+      // Response format: { code: 0, data: { videos: [...], hasMore: 0/1, cursor: \"xxx\" } }
       const data = j?.data || j;
-      const list: any[] = Array.isArray(data?.videos) ? data.videos : Array.isArray(data?.aweme_list) ? data.aweme_list : [];
+      const list: any[] = Array.isArray(data?.videos) ? data.videos : [];
       let added = 0;
       for (const it of list) {
-        const id = String(it?.aweme_id || it?.id || deriveVideoId(it) || '');
+        const id = String(it?.video_id || it?.aweme_id || '');
         if (!id || seen.has(id)) continue;
-        seen.add(id); out.push(it); added++;
+        seen.add(id); 
+        // Transform scraper7 format to internal format
+        const transformed = {
+          aweme_id: id,
+          video_id: id,
+          create_time: it?.create_time || 0,
+          title: it?.title || '',
+          play_count: it?.play_count || 0,
+          digg_count: it?.digg_count || 0,
+          comment_count: it?.comment_count || 0,
+          share_count: it?.share_count || 0,
+          collect_count: it?.collect_count || 0,
+          cover: it?.cover || '',
+        };
+        out.push(transformed); 
+        added++;
       }
-      hasMore = Boolean(data?.has_more ?? data?.hasMore);
-      const nextCursor = String(data?.cursor ?? data?.max_cursor ?? data?.next_cursor ?? '');
-      pageSummaries.push({ page, count: added, cursor: String(nextCursor || cursor || ''), has_more: hasMore, status: 200 });
-      if (added === 0) { emptyStreak += 1; } else { emptyStreak = 0; }
-      if (!nextCursor || nextCursor === String(cursor ?? '')) {
-        sameCursorStreak += 1; if (sameCursorStreak >= 2) break;
-      } else { sameCursorStreak = 0; }
-      cursor = nextCursor || cursor;
+      hasMore = Boolean(data?.hasMore === 1 || data?.has_more);
+      const nextCursor = String(data?.cursor || '');
+      pageSummaries.push({ page, count: added, cursor: String(nextCursor || cursor || ''), has_more: hasMore, status: statusCode });
+      
+      // Stop if no more data
+      if (added === 0) { 
+        emptyStreak += 1; 
+        if (emptyStreak >= 2) {
+          console.log(`[scraper7] ${username}: 2 consecutive empty pages, stopping`);
+          break;
+        }
+      } else { 
+        emptyStreak = 0; 
+      }
+      
+      // Stop if hasMore is false
+      if (!hasMore) {
+        console.log(`[scraper7] ${username}: hasMore=false, stopping`);
+        break;
+      }
+      
+      // Update cursor for next iteration
+      if (nextCursor && nextCursor !== '0' && nextCursor !== String(cursor)) {
+        cursor = nextCursor;
+        sameCursorStreak = 0;
+      } else {
+        sameCursorStreak += 1;
+        if (sameCursorStreak >= 2) {
+          console.log(`[scraper7] ${username}: Cursor not advancing, stopping`);
+          break;
+        }
+      }
+      
       await sleep(RAPID_CURSOR_RATE_MS);
     }
     // sort oldest->newest
