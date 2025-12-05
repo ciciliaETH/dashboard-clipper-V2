@@ -374,9 +374,10 @@ export async function GET(req: Request, context: any) {
     
     if (!ownerUserId && allowCreateUser) {
       const newId = randomUUID();
+      // CRITICAL: Only set instagram_username, do NOT overwrite username field
+      // username field should remain NULL for auto-created accounts
       const { error: upErr } = await supa.from('users').upsert({ 
         id: newId, 
-        username: norm, 
         email: `${norm}@example.com`, 
         role: 'umum', 
         instagram_username: norm 

@@ -339,12 +339,14 @@ export async function GET(request: Request, context: any) {
       if (empUser) userData = empUser as any;
     }
   }
-  if (!userData) {
+    // Auto-create user if not found
     const newId = randomUUID();
     try {
+      // CRITICAL: Only set tiktok_username, do NOT overwrite username field
+      // username field should remain NULL for auto-created accounts
       const { data: inserted } = await admin
         .from('users')
-        .insert({ id: newId, username: normalized, tiktok_username: normalized, role: 'umum', email: `${normalized}@example.com` })
+        .insert({ id: newId, tiktok_username: normalized, role: 'umum', email: `${normalized}@example.com` })
         .select('id, tiktok_username, tiktok_sec_uid')
         .single();
       userData = inserted as any;
