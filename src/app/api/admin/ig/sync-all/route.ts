@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { createClient as createServerSSR } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60; // 60 seconds to stay safe
+export const maxDuration = 300; // 5 minutes - syncs multiple Instagram accounts
 
 function adminClient() {
   return createClient(

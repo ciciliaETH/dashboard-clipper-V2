@@ -4,7 +4,7 @@ import { hasRequiredHashtag } from '@/lib/hashtag-filter';
 // No SSR auth needed for public leaderboard
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60; // 60 seconds to stay safe
+export const maxDuration = 300; // 5 minutes - complex leaderboard calculations
 
 function adminClient() {
   return createClient(

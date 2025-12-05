@@ -4,7 +4,7 @@ import { createClient as createSSR } from '@/lib/supabase/server';
 import { hasRequiredHashtag } from '@/lib/hashtag-filter';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60; // 60 seconds to stay safe
+export const maxDuration = 300; // 5 minutes - complex accrual calculations
 
 function adminClient() {
   return createClient(
