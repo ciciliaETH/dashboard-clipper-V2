@@ -735,7 +735,8 @@ export async function GET(request: Request, context: any) {
       await admin.from('social_metrics').upsert({ user_id: userId, platform: 'tiktok', followers, likes: totals.likes, views: totals.views, comments: totals.comments, shares: totals.shares, saves: totals.saves, last_updated: new Date().toISOString() }, { onConflict: 'user_id,platform' });
       try { await admin.from('social_metrics_history').insert({ user_id: userId, platform: 'tiktok', followers, likes: totals.likes, views: totals.views, comments: totals.comments, shares: totals.shares, saves: totals.saves, captured_at: new Date().toISOString() }); } catch {}
       return NextResponse.json({ tiktok: { ...totals, followers }, page: { hasMore, nextCursor }, source: 'external' });
-    }
+    } // End of pageMode block
+    
     // Source selection
     let videos: any[] = [];
     let telemetry: any = undefined;
