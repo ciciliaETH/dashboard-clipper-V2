@@ -41,7 +41,7 @@ export async function POST(req: Request) {
     if (!ok) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const supa = adminClient();
     const body = await req.json().catch(()=>({}));
-    const limit = Math.max(1, Math.min(100, Number(body?.limit || 100))); // Reduced from 5000 to 100
+    const maxAccountsPerRequest = 10; // Process max 10 accounts to prevent timeout
     const doFetch = body?.fetch === true;
     const force = body?.force === true;
     const debug = body?.debug === true;
@@ -75,8 +75,28 @@ export async function POST(req: Request) {
       sourceCounts.users = (data||[]).length; 
     } catch {}
 
-    const all = Array.from(set).filter(Boolean).slice(0, limit);
-    if (!all.length) return NextResponse.json({ resolved:0, fetched:0, users:0, results:[] });
+    let all = Array.from(set).filter(Boolean);
+    
+    // Filter out already resolved unless force=true
+    if (!force) {
+      const { data: cached } = await supa.from('instagram_user_ids').select('instagram_username');
+      const cachedSet = new Set((cached || []).map(r => norm(r.instagram_username)));
+      all = all.filter(u => !cachedSet.has(u));
+    }
+    
+    // Apply batch limit
+    const totalPending = all.length;
+    const toProcess = all.slice(0, maxAccountsPerRequest);
+    const remaining = totalPending - toProcess.length;
+    
+    if (!toProcess.length) return NextResponse.json({ 
+      resolved: 0, 
+      fetched: 0, 
+      users: 0, 
+      remaining: 0,
+      message: 'All usernames already resolved!',
+      results: [] 
+    });
 
     const host = process.env.RAPIDAPI_INSTAGRAM_HOST || 'instagram120.p.rapidapi.com';
     const scraper = process.env.RAPIDAPI_IG_SCRAPER_HOST || 'instagram-scraper-api11.p.rapidapi.com';
@@ -191,8 +211,8 @@ export async function POST(req: Request) {
     const base = `${protocol}//${reqHost}`;
 
     // Process each username with delay to avoid rate limits
-    for (let i = 0; i < all.length; i++) {
-      const u = all[i];
+    for (let i = 0; i < toProcess.length; i++) {
+      const u = toProcess[i];
       try {
         const id = await resolveUserId(u);
         if (id) {
@@ -228,7 +248,7 @@ export async function POST(req: Request) {
       }
       
       // Add delay between requests to avoid rate limits
-      if (i < all.length - 1) {
+      if (i < toProcess.length - 1) {
         await new Promise(r => setTimeout(r, 500)); // 500ms delay
       }
     }
@@ -249,14 +269,17 @@ export async function POST(req: Request) {
     }
 
     return NextResponse.json({ 
-      users: all.length, 
+      users: toProcess.length, 
       resolved: resolved.length, 
       fetched, 
-      failures: failures.length, 
-      success_rate: all.length > 0 ? Math.round((resolved.length / all.length) * 100) : 0,
-      message: failures.length > 0 
-        ? `Resolved ${resolved.length} of ${all.length} users. ${failures.length} failures (check RapidAPI rate limits).`
-        : `Successfully resolved all ${resolved.length} users!`,
+      failures: failures.length,
+      remaining,
+      success_rate: toProcess.length > 0 ? Math.round((resolved.length / toProcess.length) * 100) : 0,
+      message: remaining > 0
+        ? `Processed ${toProcess.length} accounts. ${remaining} more to go. ${failures.length > 0 ? `(${failures.length} failures)` : ''}`
+        : failures.length > 0 
+          ? `Resolved ${resolved.length} of ${toProcess.length} users. ${failures.length} failures (check RapidAPI rate limits).`
+          : `Successfully resolved all ${resolved.length} users!`,
       sources: debug ? sourceCounts : undefined, 
       results: debug ? results : undefined 
     });
