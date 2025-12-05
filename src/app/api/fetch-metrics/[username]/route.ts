@@ -757,7 +757,7 @@ export async function GET(request: Request, context: any) {
       // PRIMARY: Try aggregator first (proven stable)
       console.log(`[TikTok Fetch] ${normalized}: Trying AGGREGATOR (primary)...`);
       try {
-        const aggUrl = `${AGG_BASE}/tiktok/user/${encodeURIComponent(normalized)}`;
+        const aggUrl = `${AGG_BASE}/user/posts?username=${encodeURIComponent(normalized)}`;
         const aggTimeout = 30000; // 30s timeout
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), aggTimeout);
@@ -767,7 +767,8 @@ export async function GET(request: Request, context: any) {
         
         if (res.ok) {
           const data = await res.json();
-          const aggVideos = data?.videos || data?.items || [];
+          // Aggregator response format: { videos: [...] } or { data: { videos: [...] } }
+          const aggVideos = data?.data?.videos || data?.videos || data?.items || [];
           
           if (aggVideos.length > 0) {
             videos = aggVideos;
