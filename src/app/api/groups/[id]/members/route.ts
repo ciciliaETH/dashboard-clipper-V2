@@ -91,7 +91,7 @@ export async function GET(req: Request, context: any) {
     const results: any[] = [];
     const assignmentByUsername: Record<string, { employee_id: string, name: string }> = {};
     const empIds = employeeRows.map(e => e.employee_id);
-    const { data: usersMeta } = await supabase.from('users').select('id, email, full_name, tiktok_username, instagram_username').in('id', empIds);
+    const { data: usersMeta } = await supabase.from('users').select('id, email, full_name, tiktok_username, instagram_username, profile_picture_url').in('id', empIds);
     const metaMap = new Map<string, any>();
     for (const u of usersMeta || []) metaMap.set(u.id, u);
 
@@ -350,7 +350,15 @@ export async function GET(req: Request, context: any) {
       totals.saves = 0;
 
       // For UI consistency, expose only explicitly assigned TikTok accounts in `accounts`
-      results.push({ id: user.id, name: user.full_name || user.email || user.tiktok_username, tiktok_username: user.tiktok_username, accounts: assignedTT, accounts_ig: assignedIG, totals });
+      results.push({ 
+        id: user.id, 
+        name: user.full_name || user.email || user.tiktok_username, 
+        tiktok_username: user.tiktok_username, 
+        profile_picture_url: user.profile_picture_url || null,
+        accounts: assignedTT, 
+        accounts_ig: assignedIG, 
+        totals 
+      });
     }
 
     // also aggregate group totals

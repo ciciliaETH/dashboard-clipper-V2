@@ -15,6 +15,46 @@ type Row = {
   total?: number;
 };
 
+// Avatar component with gradient fallback
+function Avatar({ username, profileUrl, size = 'sm' }: { username: string; profileUrl?: string | null; size?: 'sm' | 'md' | 'lg' }) {
+  const sizes = { sm: 'w-8 h-8 text-sm', md: 'w-10 h-10 text-base', lg: 'w-12 h-12 text-lg' };
+  const sizeClass = sizes[size];
+  
+  const getInitials = (name: string) => {
+    if (!name) return '?';
+    return name.slice(0, 2).toUpperCase();
+  };
+  
+  const getGradient = (name: string) => {
+    const colors = [
+      'from-blue-500 to-cyan-500',
+      'from-purple-500 to-pink-500',
+      'from-orange-500 to-red-500',
+      'from-green-500 to-teal-500',
+      'from-indigo-500 to-purple-500',
+      'from-pink-500 to-rose-500',
+      'from-yellow-500 to-orange-500',
+      'from-teal-500 to-blue-500',
+    ];
+    const hash = name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    return colors[hash % colors.length];
+  };
+  
+  if (profileUrl) {
+    return (
+      <div className={`${sizeClass} rounded-full overflow-hidden border-2 border-white/20 flex-shrink-0`}>
+        <img src={profileUrl} alt={username} className="w-full h-full object-cover" />
+      </div>
+    );
+  }
+  
+  return (
+    <div className={`${sizeClass} rounded-full bg-gradient-to-br ${getGradient(username)} flex items-center justify-center text-white font-semibold flex-shrink-0 border-2 border-white/20`}>
+      {getInitials(username)}
+    </div>
+  );
+}
+
 export default function LeaderboardPage() {
   const [month, setMonth] = useState<string>(()=> new Date().toISOString().slice(0,7)); // YYYY-MM
   const [interval, setIntervalVal] = useState<'monthly'|'weekly'>('monthly');
@@ -43,6 +83,7 @@ export default function LeaderboardPage() {
       const res = await fetch(url.toString());
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || 'Failed to load leaderboard');
+      console.log('Leaderboard data:', json?.data); // Debug
       setRows(json?.data || []);
       setPrizes(json?.prizes || null);
       if (json?.campaign_id) setCampaignId(json.campaign_id);
@@ -154,7 +195,7 @@ export default function LeaderboardPage() {
                         </div>
                         <div className="text-center">
                           <div className="flex flex-col items-center gap-2 mb-2">
-                            <EmployeeAvatar profilePictureUrl={r.profile_picture_url} username={r.username} size="lg" />
+                            <Avatar username={r.username} profileUrl={r.profile_picture_url} size="lg" />
                             <div className="text-xs sm:text-sm text-white/70">{r.username}</div>
                           </div>
                           {typeof prize === 'number' && (
@@ -206,7 +247,7 @@ export default function LeaderboardPage() {
                     <td className="py-2 px-4 text-white/60">{i+4}</td>
                     <td className="py-2 px-4">
                       <div className="flex items-center gap-3">
-                        <EmployeeAvatar profilePictureUrl={r.profile_picture_url} username={r.username} size="sm" />
+                        <Avatar username={r.username} profileUrl={r.profile_picture_url} size="sm" />
                         <span className="text-white/90">{r.username}</span>
                       </div>
                     </td>

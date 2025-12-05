@@ -20,6 +20,46 @@ import { FaPlus } from 'react-icons/fa';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, Filler);
 
+// Avatar component with gradient fallback
+function Avatar({ username, profileUrl, size = 'sm' }: { username: string; profileUrl?: string | null; size?: 'xs' | 'sm' | 'md' }) {
+  const sizes = { xs: 'w-6 h-6 text-xs', sm: 'w-8 h-8 text-sm', md: 'w-10 h-10 text-base' };
+  const sizeClass = sizes[size];
+  
+  const getInitials = (name: string) => {
+    if (!name) return '?';
+    return name.slice(0, 2).toUpperCase();
+  };
+  
+  const getGradient = (name: string) => {
+    const colors = [
+      'from-blue-500 to-cyan-500',
+      'from-purple-500 to-pink-500',
+      'from-orange-500 to-red-500',
+      'from-green-500 to-teal-500',
+      'from-indigo-500 to-purple-500',
+      'from-pink-500 to-rose-500',
+      'from-yellow-500 to-orange-500',
+      'from-teal-500 to-blue-500',
+    ];
+    const hash = name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    return colors[hash % colors.length];
+  };
+  
+  if (profileUrl) {
+    return (
+      <div className={`${sizeClass} rounded-full overflow-hidden border-2 border-white/20 flex-shrink-0`}>
+        <img src={profileUrl} alt={username} className="w-full h-full object-cover" />
+      </div>
+    );
+  }
+  
+  return (
+    <div className={`${sizeClass} rounded-full bg-gradient-to-br ${getGradient(username)} flex items-center justify-center text-white font-semibold flex-shrink-0 border-2 border-white/20`}>
+      {getInitials(username)}
+    </div>
+  );
+}
+
 export default function CampaignsPage() {
   const supabase = createClient();
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -823,7 +863,12 @@ export default function CampaignsPage() {
                 <tbody>
                   {filteredSortedParticipants.map((p:any)=> (
                     <tr key={p.id} className="hover:bg-white/5 cursor-pointer" onClick={()=> { setSelectedUser(String(p.id)); setSelectedUserName(String(p.name || p.tiktok_username || '')); }}>
-                      <td className="px-2 py-2 text-white">{p.name || `@${p.tiktok_username || ''}`}</td>
+                      <td className="px-2 py-2 text-white">
+                        <div className="flex items-center gap-2">
+                          <Avatar username={p.name || p.tiktok_username || ''} profileUrl={p.profile_picture_url} size="sm" />
+                          <span>{p.name || `@${p.tiktok_username || ''}`}</span>
+                        </div>
+                      </td>
                       <td className="px-2 py-2 text-right">{Number(p.totals?.views||0).toLocaleString('id-ID')}</td>
                       <td className="px-2 py-2 text-right">{Number(p.totals?.likes||0).toLocaleString('id-ID')}</td>
                       <td className="px-2 py-2 text-right">{Number(p.totals?.comments||0).toLocaleString('id-ID')}</td>

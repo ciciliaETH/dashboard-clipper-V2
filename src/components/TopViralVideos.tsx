@@ -17,6 +17,7 @@ interface ViralVideo {
   username: string;
   owner_name: string | null;
   owner_id: string;
+  owner_profile_picture_url?: string | null;
   post_date: string;
   link: string;
   metrics: VideoMetrics;
@@ -39,6 +40,45 @@ interface TopViralVideosProps {
   platform?: 'all' | 'tiktok' | 'instagram';
   days?: 7 | 28;
   limit?: number;
+}
+
+function Avatar({ username, profileUrl, size = 'sm' }: { username: string; profileUrl?: string | null; size?: 'xs' | 'sm' | 'md' }) {
+  const sizes = { xs: 'w-6 h-6 text-xs', sm: 'w-8 h-8 text-sm', md: 'w-10 h-10 text-base' };
+  const sizeClass = sizes[size];
+  
+  const getInitials = (name: string) => {
+    if (!name) return '?';
+    return name.slice(0, 2).toUpperCase();
+  };
+  
+  const getGradient = (name: string) => {
+    const colors = [
+      'from-blue-500 to-cyan-500',
+      'from-purple-500 to-pink-500',
+      'from-orange-500 to-red-500',
+      'from-green-500 to-teal-500',
+      'from-indigo-500 to-purple-500',
+      'from-pink-500 to-rose-500',
+      'from-yellow-500 to-orange-500',
+      'from-teal-500 to-blue-500',
+    ];
+    const hash = name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    return colors[hash % colors.length];
+  };
+  
+  if (profileUrl) {
+    return (
+      <div className={`${sizeClass} rounded-full overflow-hidden border-2 border-white/40 flex-shrink-0 shadow-sm`}>
+        <img src={profileUrl} alt={username} className="w-full h-full object-cover" />
+      </div>
+    );
+  }
+  
+  return (
+    <div className={`${sizeClass} rounded-full bg-gradient-to-br ${getGradient(username)} flex items-center justify-center text-white font-semibold flex-shrink-0 border-2 border-white/40 shadow-sm`}>
+      {getInitials(username)}
+    </div>
+  );
 }
 
 export default function TopViralVideos({
@@ -179,13 +219,22 @@ export default function TopViralVideos({
                   rel="noopener noreferrer"
                   className="group"
                 >
-                  <h3 className="font-semibold text-lg mb-1 group-hover:text-blue-600 transition-colors flex items-center gap-2">
-                    {video.owner_name || video.username}
-                    <svg className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                    </svg>
-                  </h3>
-                  <p className="text-sm text-gray-600 mb-3">@{video.username}</p>
+                  <div className="flex items-center gap-2 mb-2">
+                    <Avatar 
+                      username={video.owner_name || video.username} 
+                      profileUrl={video.owner_profile_picture_url} 
+                      size="sm" 
+                    />
+                    <div className="flex-1 min-w-0">
+                      <h3 className="font-semibold text-lg group-hover:text-blue-600 transition-colors flex items-center gap-2 truncate">
+                        {video.owner_name || video.username}
+                        <svg className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                        </svg>
+                      </h3>
+                      <p className="text-sm text-gray-600 truncate">@{video.username}</p>
+                    </div>
+                  </div>
                 </a>
 
                 {/* Metrics */}
