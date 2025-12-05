@@ -351,7 +351,6 @@ export async function GET(req: Request, context: any) {
         totalsInstagram.posts += 1;
       }
     }
-    }
     // If IG still zero and campaignId provided, fallback to snapshots campaign_instagram_participants
     if ((totalsInstagram.views + totalsInstagram.likes + totalsInstagram.comments) === 0 && campaignId && normIG.length) {
       const { data: snapsIG2 } = await supabase
