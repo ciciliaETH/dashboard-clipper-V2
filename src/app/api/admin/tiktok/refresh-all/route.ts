@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { createClient as createServerSSR } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 300; // 5 minutes for Vercel Pro
+export const maxDuration = 60; // 60 seconds max for Vercel Pro
 
 function adminClient() {
   return createClient(
@@ -78,10 +78,14 @@ async function refreshHandler(req: Request) {
   const isPost = req.method === 'POST';
   const body = isPost ? await req.json().catch(() => ({})) : {};
   
+  // CRITICAL: Limit to max 3 usernames per request to avoid timeout
+  // TikTok fetch takes longer than Instagram (60s timeout per username)
+  const maxUsernamesPerRequest = 3;
   // GUARANTEED ZERO RATE LIMITS: 10 seconds delay (10x slower than limit)
   // Pro plan: 1 req/sec, with 10s delay = absolutely safe
   const delayMs = Math.max(0, Math.min(30000, Number(body?.delay_ms || 10000))); // Default 10 seconds
   const limit = Math.max(1, Math.min(10000, Number(body?.limit || 1000)));
+  const offset = Math.max(0, Number(body?.offset || 0)); // For pagination
   
   // Get base URL for fetch-metrics endpoint
   const protocol = req.headers.get('x-forwarded-proto') || 'http';
@@ -123,14 +127,30 @@ async function refreshHandler(req: Request) {
     usernameToCampaigns.set(username, campaigns);
   }
 
+  // CRITICAL: Apply offset and limit to prevent timeout
+  const paginatedUsernames = allUsernames.slice(offset, offset + maxUsernamesPerRequest);
+  const hasMore = offset + maxUsernamesPerRequest < allUsernames.length;
+  
+  if (paginatedUsernames.length === 0) {
+    return NextResponse.json({
+      total_usernames: allUsernames.length,
+      offset,
+      processed: 0,
+      success: 0,
+      failed: 0,
+      has_more: false,
+      message: 'No more usernames to process at this offset'
+    });
+  }
+
   // Sequential fetch with delay between each request to avoid rate limits
   const results: FetchResult[] = [];
   let successCount = 0;
   let failedCount = 0;
-  const maxRetries = 2; // Retry failed requests up to 2 times
+  const maxRetries = 1; // Reduced retries to avoid timeout
   
-  for (let i = 0; i < allUsernames.length; i++) {
-    const username = allUsernames[i];
+  for (let i = 0; i < paginatedUsernames.length; i++) {
+    const username = paginatedUsernames[i];
     const campaignIds = usernameToCampaigns.get(username) || [];
     
     // Use a wide date range to get all data (last 6 months to today)
@@ -207,7 +227,7 @@ async function refreshHandler(req: Request) {
     results.push(result);
     
     // Delay after EACH request to avoid rate limits (except last one)
-    if (i < allUsernames.length - 1) {
+    if (i < paginatedUsernames.length - 1) {
       await new Promise(resolve => setTimeout(resolve, delayMs));
     }
   }
@@ -235,9 +255,13 @@ async function refreshHandler(req: Request) {
 
   return NextResponse.json({
     total_usernames: allUsernames.length,
+    offset,
+    limit: maxUsernamesPerRequest,
     processed: results.length,
     success: successCount,
     failed: failedCount,
+    has_more: hasMore,
+    next_offset: hasMore ? offset + maxUsernamesPerRequest : null,
     total_posts: totalPosts,
     total_views: totalViews,
     total_likes: totalLikes,
@@ -247,7 +271,10 @@ async function refreshHandler(req: Request) {
       username: r.username,
       error: r.error,
       status: r.status
-    })) : undefined
+    })) : undefined,
+    message: hasMore 
+      ? `Processed ${results.length} usernames. Call again with offset=${offset + maxUsernamesPerRequest} to continue.`
+      : 'All usernames processed.'
   });
 }
 

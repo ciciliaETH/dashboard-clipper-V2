@@ -111,41 +111,101 @@ export async function GET(req: Request) {
       const allIG = Array.from(new Set(Array.from(handlesIG.values()).flat())).filter(Boolean);
 
       // Query monthly aggregates per handle from DB
+      // CRITICAL FIX: Group by video_id and calculate accrual (delta from first to last snapshot)
       const aggTT = new Map<string, { views:number; likes:number; comments:number; shares:number; saves:number; posts:number }>();
       if (allTT.length) {
         const { data: rowsTT } = await supa
           .from('tiktok_posts_daily')
-          .select('username, play_count, digg_count, comment_count, share_count, save_count')
+          .select('video_id, username, post_date, play_count, digg_count, comment_count, share_count, save_count')
           .in('username', allTT)
           .gte('post_date', startISO)
-          .lte('post_date', endISO);
+          .lte('post_date', endISO)
+          .order('video_id')
+          .order('post_date');
+        
+        // Group by video_id to calculate accrual
+        const videoMap = new Map<string, any[]>();
         for (const r of rowsTT || []) {
-          const u = String((r as any).username).toLowerCase();
+          const vid = String((r as any).video_id);
+          if (!videoMap.has(vid)) videoMap.set(vid, []);
+          videoMap.get(vid)!.push(r);
+        }
+        
+        // Calculate accrual per video (delta from first to last snapshot)
+        for (const [vid, snapshots] of videoMap.entries()) {
+          if (snapshots.length === 0) continue;
+          
+          snapshots.sort((a: any, b: any) => new Date(a.post_date).getTime() - new Date(b.post_date).getTime());
+          const first = snapshots[0];
+          const last = snapshots[snapshots.length - 1];
+          const u = String(last.username).toLowerCase();
+          
           const cur = aggTT.get(u) || { views:0, likes:0, comments:0, shares:0, saves:0, posts:0 };
-          cur.views += Number((r as any).play_count)||0;
-          cur.likes += Number((r as any).digg_count)||0;
-          cur.comments += Number((r as any).comment_count)||0;
-          cur.shares += Number((r as any).share_count)||0;
-          cur.saves += Number((r as any).save_count)||0;
-          cur.posts += 1;
+          
+          // Calculate delta (accrual) or use single snapshot value
+          cur.views += snapshots.length === 1 
+            ? Number(last.play_count || 0)
+            : Math.max(0, Number(last.play_count || 0) - Number(first.play_count || 0));
+          cur.likes += snapshots.length === 1
+            ? Number(last.digg_count || 0)
+            : Math.max(0, Number(last.digg_count || 0) - Number(first.digg_count || 0));
+          cur.comments += snapshots.length === 1
+            ? Number(last.comment_count || 0)
+            : Math.max(0, Number(last.comment_count || 0) - Number(first.comment_count || 0));
+          cur.shares += snapshots.length === 1
+            ? Number(last.share_count || 0)
+            : Math.max(0, Number(last.share_count || 0) - Number(first.share_count || 0));
+          cur.saves += snapshots.length === 1
+            ? Number(last.save_count || 0)
+            : Math.max(0, Number(last.save_count || 0) - Number(first.save_count || 0));
+          cur.posts += 1; // Count unique videos
+          
           aggTT.set(u, cur);
         }
       }
+      
       const aggIG = new Map<string, { views:number; likes:number; comments:number; posts:number }>();
       if (allIG.length) {
         const { data: rowsIG } = await supa
           .from('instagram_posts_daily')
-          .select('username, play_count, like_count, comment_count')
+          .select('id, username, post_date, play_count, like_count, comment_count')
           .in('username', allIG)
           .gte('post_date', startISO)
-          .lte('post_date', endISO);
+          .lte('post_date', endISO)
+          .order('id')
+          .order('post_date');
+        
+        // Group by post id to calculate accrual
+        const postMap = new Map<string, any[]>();
         for (const r of rowsIG || []) {
-          const u = String((r as any).username).toLowerCase();
+          const postId = String((r as any).id);
+          if (!postMap.has(postId)) postMap.set(postId, []);
+          postMap.get(postId)!.push(r);
+        }
+        
+        // Calculate accrual per post (delta from first to last snapshot)
+        for (const [postId, snapshots] of postMap.entries()) {
+          if (snapshots.length === 0) continue;
+          
+          snapshots.sort((a: any, b: any) => new Date(a.post_date).getTime() - new Date(b.post_date).getTime());
+          const first = snapshots[0];
+          const last = snapshots[snapshots.length - 1];
+          const u = String(last.username).toLowerCase();
+          
           const cur = aggIG.get(u) || { views:0, likes:0, comments:0, posts:0 };
-          cur.views += Number((r as any).play_count)||0;
-          cur.likes += Number((r as any).like_count)||0;
-          cur.comments += Number((r as any).comment_count)||0;
-          cur.posts += 1;
+          
+          // Calculate delta (accrual) or use single snapshot value
+          cur.views += snapshots.length === 1
+            ? Number(last.play_count || 0)
+            : Math.max(0, Number(last.play_count || 0) - Number(first.play_count || 0));
+          cur.likes += snapshots.length === 1
+            ? Number(last.like_count || 0)
+            : Math.max(0, Number(last.like_count || 0) - Number(first.like_count || 0));
+          cur.comments += snapshots.length === 1
+            ? Number(last.comment_count || 0)
+            : Math.max(0, Number(last.comment_count || 0) - Number(first.comment_count || 0));
+          cur.posts += 1; // Count unique posts
+          
           aggIG.set(u, cur);
         }
       }
