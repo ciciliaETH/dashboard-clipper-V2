@@ -338,26 +338,28 @@ export async function GET(request: Request, context: any) {
         .maybeSingle();
       if (empUser) userData = empUser as any;
     }
-  }
-    // Auto-create user if not found
-    const newId = randomUUID();
-    try {
-      // CRITICAL: Only set tiktok_username, do NOT overwrite username field
-      // username field should remain NULL for auto-created accounts
-      const { data: inserted } = await admin
-        .from('users')
-        .insert({ id: newId, tiktok_username: normalized, role: 'umum', email: `${normalized}@example.com` })
-        .select('id, tiktok_username, tiktok_sec_uid')
-        .single();
-      userData = inserted as any;
-    } catch (e) {
-      // network/db issue – fall back to a local placeholder so the rest of the pipeline can proceed
-      console.warn('[fetch-metrics] users insert failed, using placeholder userData:', e);
-      userData = { id: newId, tiktok_username: normalized, tiktok_sec_uid: null } as any;
-    }
+    
+    // Auto-create user if not found after employee check
     if (!userData) {
-      // as a last resort, create placeholder
-      userData = { id: newId, tiktok_username: normalized, tiktok_sec_uid: null } as any;
+      const newId = randomUUID();
+      try {
+        // CRITICAL: Only set tiktok_username, do NOT overwrite username field
+        // username field should remain NULL for auto-created accounts
+        const { data: inserted } = await admin
+          .from('users')
+          .insert({ id: newId, tiktok_username: normalized, role: 'umum', email: `${normalized}@example.com` })
+          .select('id, tiktok_username, tiktok_sec_uid')
+          .single();
+        userData = inserted as any;
+      } catch (e) {
+        // network/db issue – fall back to a local placeholder so the rest of the pipeline can proceed
+        console.warn('[fetch-metrics] users insert failed, using placeholder userData:', e);
+        userData = { id: newId, tiktok_username: normalized, tiktok_sec_uid: null } as any;
+      }
+      if (!userData) {
+        // as a last resort, create placeholder
+        userData = { id: newId, tiktok_username: normalized, tiktok_sec_uid: null } as any;
+      }
     }
   }
   const { id: userId, tiktok_username, tiktok_sec_uid } = userData as { id: string; tiktok_username: string; tiktok_sec_uid: string | null };
