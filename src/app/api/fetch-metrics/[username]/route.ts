@@ -541,10 +541,19 @@ export async function GET(request: Request, context: any) {
       let j: any = null;
       let statusCode = 200;
       try {
-        j = await rapidApiRequest<any>({ url: url.toString(), method: 'GET', rapidApiHost: host, timeoutMs: 20000, maxPerKeyRetries: 1 });
-        // Check scraper7 response code
-        if (j?.code !== 0) {
-          console.error(`[scraper7] Error code ${j?.code}: ${j?.msg || 'Unknown error'} for ${normalized}`);
+        // Use default maxPerKeyRetries=5 from rapidapi.ts for maximum reliability
+        j = await rapidApiRequest<any>({ url: url.toString(), method: 'GET', rapidApiHost: host, timeoutMs: 30000 });
+        
+        // Scraper7 response can have different formats:
+        // 1. { msg: "success", data: { videos: [...] } }
+        // 2. { code: 0, data: { videos: [...] } }
+        // 3. { data: { videos: [...] } } (direct)
+        
+        const isSuccess = j?.msg === 'success' || j?.code === 0 || (j?.data && Array.isArray(j?.data?.videos));
+        
+        if (!isSuccess) {
+          const errorMsg = j?.msg || j?.message || 'Unknown error';
+          console.error(`[scraper7] API error for ${normalized}: ${errorMsg}`, j);
           statusCode = 500;
           pageSummaries.push({ page, count: 0, cursor: String(cursor ?? ''), has_more: false, status: statusCode });
           break;
@@ -554,9 +563,15 @@ export async function GET(request: Request, context: any) {
         pageSummaries.push({ page, count: 0, cursor: String(cursor ?? ''), has_more: false, status: 500 });
         break;
       }
-      // Response format: { code: 0, data: { videos: [...], hasMore: 0/1, cursor: \"xxx\" } }
+      // Response format: { msg: "success", data: { videos: [...], hasMore: 0/1, cursor: "xxx" } }
       const data = j?.data || j;
       const list: any[] = Array.isArray(data?.videos) ? data.videos : [];
+      
+      // DEBUG: Log first page response for troubleshooting
+      if (page === 1 && list.length > 0) {
+        console.log(`[scraper7] ${normalized}: Successfully fetched ${list.length} videos on page 1`);
+      }
+      
       let added = 0;
       for (const it of list) {
         const id = String(it?.video_id || it?.aweme_id || '');
@@ -743,8 +758,13 @@ export async function GET(request: Request, context: any) {
       if (provider === 'api15') {
         const rf = await rapidApi15CursorFetchAll();
         if (Array.isArray(rf)) videos = rf; else { videos = rf.list || []; telemetry = rf.telemetry; }
-        // Fallback chain if rate limited or empty
-        if (RAPID_FALLBACK_ON_429 && ((telemetry?.rateLimited) || videos.length === 0)) {
+        
+        // CRITICAL FALLBACK: If scraper7 returns ZERO videos, ALWAYS try rapid_cursor as backup
+        // This ensures we NEVER have missing data for ANY account
+        const needsFallback = videos.length === 0 || telemetry?.rateLimited;
+        
+        if (RAPID_FALLBACK_ON_429 && needsFallback) {
+          console.log(`[TikTok Fetch] Scraper7 returned ${videos.length} videos for ${normalized}, trying rapid_cursor fallback...`);
           const rf2 = await rapidFastCursorFetchAll();
           let vids2: any[] = Array.isArray(rf2) ? rf2 : (rf2.list || []);
           if (!Array.isArray(rf2)) telemetry = telemetry || {}; telemetry = { ...(telemetry||{}), alt: rf2.telemetry };

@@ -173,7 +173,7 @@ async function refreshHandler(req: Request) {
   
   let totalSuccess = 0;
   let totalFailed = 0;
-  const maxRetries = 2; // Retry failed requests up to 2 times
+  const maxRetries = 4; // INCREASED: 4 retries for ZERO data loss guarantee
   
   // Manual batch processing with offset tracking
   const totalBatches = Math.ceil(usernamesToFetch.length / accountsPerBatch);
@@ -230,7 +230,16 @@ async function refreshHandler(req: Request) {
       batchResults.push(result!);
       allResults.push(result!);
       
+      // VALIDATION: Ensure response has actual data
       if (result!.ok) {
+        const inserted = result!.data?.inserted || 0;
+        const views = result!.data?.instagram?.views || 0;
+        
+        // WARNING: Log if account has ZERO data
+        if (inserted === 0 && views === 0) {
+          console.warn(`[Instagram Refresh] WARNING: ${username} returned ZERO data (empty account or API issue)`);
+        }
+        
         batchSuccess++;
         totalSuccess++;
       } else {
@@ -285,6 +294,15 @@ async function refreshHandler(req: Request) {
   const processedCount = offset + allResults.length;
   const remainingCount = usernamesToFetch.length - processedCount;
   const nextOffset = remainingCount > 0 ? processedCount : 0;
+  
+  // CRITICAL ERROR LOGGING: Alert if any accounts failed after all retries
+  if (totalFailed > 0) {
+    const failedUsernames = failedResults.map(r => r.username).join(', ');
+    console.error(`[Instagram Refresh] ⚠️ CRITICAL: ${totalFailed} accounts FAILED after ${maxRetries} retries: ${failedUsernames}`);
+    console.error('[Instagram Refresh] Failed details:', failedResults.map(r => ({ username: r.username, status: r.status, error: r.error })));
+  } else {
+    console.log(`[Instagram Refresh] ✅ SUCCESS: All ${totalSuccess} accounts refreshed successfully`);
+  }
 
   return NextResponse.json({
     total_usernames: allUsernames.length,

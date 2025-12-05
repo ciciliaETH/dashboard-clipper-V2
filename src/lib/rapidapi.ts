@@ -26,8 +26,8 @@ export type RapidRequestOpts = {
   body?: any;
   timeoutMs?: number;
   rapidApiHost?: string; // if endpoint requires X-RapidAPI-Host
-  maxPerKeyRetries?: number; // how many retries on the same key for network/transient errors
-  cooldownMsOnLimit?: number; // cooldown if rate-limited/quota, default 15 minutes
+  maxPerKeyRetries?: number; // how many retries on the same key for network/transient errors (default: 5)
+  cooldownMsOnLimit?: number; // cooldown if rate-limited/quota, default 5 min premium / 15 min free
   keysEnvName?: string; // by default reads RAPID_API_KEYS, fallback RAPIDAPI_KEYS, RAPIDAPI_KEY
 };
 
@@ -64,8 +64,8 @@ export async function rapidApiRequest<T = any>(opts: RapidRequestOpts): Promise<
     body,
     timeoutMs = 20000,
     rapidApiHost,
-    maxPerKeyRetries = 0,
-    cooldownMsOnLimit = 15 * 60 * 1000,
+    maxPerKeyRetries = 5, // DEFAULT 5 RETRIES FOR RELIABILITY
+    cooldownMsOnLimit = 15 * 60 * 1000, // Will override for premium key below
     keysEnvName,
   } = opts;
 
@@ -134,7 +134,9 @@ export async function rapidApiRequest<T = any>(opts: RapidRequestOpts): Promise<
         if (isRateLimitStatus(res.status)) {
           let text = '';
           try { text = await res.text(); } catch {}
-          cooldownUntil.set(idx, Date.now() + cooldownMsOnLimit);
+          // Premium key (idx 0) gets shorter cooldown: 5 min vs 15 min for free keys
+          const cooldown = idx === 0 ? 5 * 60 * 1000 : cooldownMsOnLimit;
+          cooldownUntil.set(idx, Date.now() + cooldown);
           errors.push(`Key#${idx + 1} rate-limited (${res.status}) ${text.slice(0, 200)}`);
           break; // move to next key
         }
@@ -143,12 +145,16 @@ export async function rapidApiRequest<T = any>(opts: RapidRequestOpts): Promise<
           let text = '';
           try { text = await res.text(); } catch {}
           if (looksLikeQuotaError(text)) {
-            cooldownUntil.set(idx, Date.now() + cooldownMsOnLimit);
+            // Premium key (idx 0) gets shorter cooldown: 5 min vs 15 min
+            const cooldown = idx === 0 ? 5 * 60 * 1000 : cooldownMsOnLimit;
+            cooldownUntil.set(idx, Date.now() + cooldown);
             errors.push(`Key#${idx + 1} quota msg: ${text.slice(0, 200)}`);
             break; // move to next key
           }
           if (attempt < maxPerKeyRetries) {
-            await delay(300 * (attempt + 1));
+            // Exponential backoff: 500ms, 1s, 2s, 4s, 8s
+            const backoffMs = Math.min(500 * Math.pow(2, attempt), 10000);
+            await delay(backoffMs);
             continue; // retry same key
           }
           errors.push(`Key#${idx + 1} non-ok ${res.status}: ${text.slice(0, 200)}`);
@@ -164,9 +170,10 @@ export async function rapidApiRequest<T = any>(opts: RapidRequestOpts): Promise<
       } catch (e: any) {
         clearTimeout(timer);
         const msg = String(e?.message || e);
-        // Retry on abort/timeout/network
+        // Retry on abort/timeout/network with exponential backoff
         if (attempt < maxPerKeyRetries && (msg.includes('aborted') || msg.includes('timeout') || msg.includes('network'))) {
-          await delay(300 * (attempt + 1));
+          const backoffMs = Math.min(500 * Math.pow(2, attempt), 10000);
+          await delay(backoffMs);
           continue;
         }
         errors.push(`Key#${idx + 1} exception: ${msg}`);

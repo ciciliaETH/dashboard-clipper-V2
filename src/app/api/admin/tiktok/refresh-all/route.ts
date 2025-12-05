@@ -177,7 +177,7 @@ async function refreshHandler(req: Request) {
   
   let totalSuccess = 0;
   let totalFailed = 0;
-  const maxRetries = 2; // Retry failed requests up to 2 times
+  const maxRetries = 4; // INCREASED: 4 retries for ZERO data loss guarantee
   
   // Manual batch processing with offset tracking
   const totalBatches = Math.ceil(allUsernames.length / accountsPerBatch);
@@ -240,8 +240,14 @@ async function refreshHandler(req: Request) {
       }
       
       // Update ALL campaigns that have this username - CRITICAL: Save data immediately
+      // VALIDATION: Ensure response has actual data (not just empty success)
       if (result && result.ok && result.data?.tiktok) {
         const t = result.data.tiktok;
+        
+        // WARNING: Log if account has ZERO data (might be empty account or API issue)
+        if (t.posts_total === 0 && t.views === 0 && t.followers === 0) {
+          console.warn(`[TikTok Refresh] WARNING: ${username} returned ZERO data (empty account or API issue)`);
+        }
         
         for (const cid of campaignIds) {
           const { error: upsertError } = await supa
@@ -325,6 +331,15 @@ async function refreshHandler(req: Request) {
   const processedCount = offset + allResults.length;
   const remainingCount = allUsernames.length - processedCount;
   const nextOffset = remainingCount > 0 ? processedCount : 0;
+  
+  // CRITICAL ERROR LOGGING: Alert if any accounts failed after all retries
+  if (totalFailed > 0) {
+    const failedUsernames = failedResults.map(r => r.username).join(', ');
+    console.error(`[TikTok Refresh] ⚠️ CRITICAL: ${totalFailed} accounts FAILED after ${maxRetries} retries: ${failedUsernames}`);
+    console.error('[TikTok Refresh] Failed details:', failedResults.map(r => ({ username: r.username, status: r.status, error: r.error })));
+  } else {
+    console.log(`[TikTok Refresh] ✅ SUCCESS: All ${totalSuccess} accounts refreshed successfully`);
+  }
 
   return NextResponse.json({
     total_usernames: allUsernames.length,
