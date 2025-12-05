@@ -3,9 +3,9 @@ import { createClient } from '@/lib/supabase/server';
 import { createClient as createAdmin } from '@supabase/supabase-js';
 import { randomUUID } from 'crypto';
 import { rapidApiRequest } from '@/lib/rapidapi';
-// Aggregator base (fallback over RapidAPI). Override via env AGGREGATOR_BASE
-const AGG_BASE = process.env.AGGREGATOR_BASE || 'http://202.10.44.90/api/v1';
-const DISABLE_RAPIDAPI_FALLBACK = process.env.DISABLE_RAPIDAPI_FALLBACK === '1';
+// DIRECT RAPIDAPI ONLY - NO AGGREGATOR OR EDGE FUNCTIONS
+const TIKTOK_RAPID_HOST = process.env.RAPIDAPI_TIKTOK_HOST || 'tiktok-scraper7.p.rapidapi.com';
+const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY!;
 // Backfill-only RapidAPI cursor mode (fast reliable data scraper)
 const RAPID_CURSOR_ON = process.env.RAPIDAPI_USE_CURSOR === '1';
 const RAPID_PROVIDER = (process.env.RAPIDAPI_PROVIDER || 'fast').toLowerCase(); // 'fast' | 'api15'
@@ -364,7 +364,7 @@ export async function GET(request: Request, context: any) {
   }
   const { id: userId, tiktok_username, tiktok_sec_uid } = userData as { id: string; tiktok_username: string; tiktok_sec_uid: string | null };
 
-  // Helper: fetch all videos via external API with pagination
+  // Helper: fetch all videos via RapidAPI tiktok-scraper7
   const fetchAllVideos = async (): Promise<any[]> => {
     const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
     const perPage = clamp(Number(countParam ?? '100'), 20, 1000);
@@ -378,7 +378,7 @@ export async function GET(request: Request, context: any) {
     const seen = new Set<string>();
     const out: any[] = [];
     let cursor: string | undefined = undefined;
-    let fallbackCursor: string | undefined = undefined; // epoch ms string
+    let fallbackCursor: string | undefined = undefined;
     let sameCursorCount = 0;
     let noNewItemsCount = 0;
     let page = 0;
@@ -386,23 +386,17 @@ export async function GET(request: Request, context: any) {
     while (true) {
       if (maxPages > 0 && page >= maxPages) break;
       page += 1;
-      const apiUrlObj = new URL(AGG_BASE + '/user/posts');
-      apiUrlObj.searchParams.set('username', normalized);
-      apiUrlObj.searchParams.set('count', String(perPage));
-      if (startParam) apiUrlObj.searchParams.set('start', startParam);
-      if (endParam) apiUrlObj.searchParams.set('end', endParam);
-      if (cursor) apiUrlObj.searchParams.set('cursor', cursor);
-      // basic retry with gentle backoff per page
+      const url = `https://${TIKTOK_RAPID_HOST}/user/posts?unique_id=@${encodeURIComponent(normalized)}&count=${perPage}${cursor ? `&cursor=${cursor}` : ''}`;
       let j: any = null;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          const r = await fetch(apiUrlObj.toString(), { headers: { Accept: 'application/json' }, cache: 'no-store' });
-          if (r.ok) { j = await r.json().catch(() => null); break; }
-        } catch {}
-        await sleep(300 * (attempt + 1));
+      try {
+        j = await rapidApiRequest({ url, method: 'GET', rapidApiHost: TIKTOK_RAPID_HOST, timeoutMs: 30000 });
+      } catch (err) {
+        console.error('[fetchAllVideos] RapidAPI error:', err);
+        await sleep(1000);
+        break;
       }
-      if (!j) break;
-      const vlist: any[] = Array.isArray(j?.data?.videos) ? j.data.videos : [];
+      if (!j || !j.data) break;
+      const vlist: any[] = Array.isArray(j?.data?.videos) ? j.data.videos : (Array.isArray(j?.data?.aweme_list) ? j.data.aweme_list : []);
       const prevSize = out.length;
       let stop = false;
       for (const v of vlist) {
@@ -440,52 +434,8 @@ export async function GET(request: Request, context: any) {
       }
       cursor = nextCursor;
       fallbackCursor = nextFallback;
-      // be nice to the upstream
-      await sleep(200);
-    }
-    // If we barely progressed (<= perPage) and startBound is far in the past, try time-window sweep
-    const progressed = out.length;
-    const farPast = startBound && ((Date.now() - startBound.getTime()) > 60*24*60*60*1000); // >60 days
-    if (progressed <= perPage && farPast) {
-      const seen2 = new Set<string>(Array.from(seen));
-      const out2: any[] = [...out];
-      const formatDate = (d: Date) => d.toISOString().slice(0,10);
-      let cursorStallCount = 0;
-      let newAdded = 0;
-      const end = endBound ? new Date(endBound) : new Date();
-      const start = new Date(startBound!);
-      // walk backwards in ~21-day windows
-      let winEnd = new Date(end);
-      while (winEnd > start) {
-        const winStart = new Date(Math.max(start.getTime(), winEnd.getTime() - 21*24*60*60*1000 + 1));
-        const u = new URL(AGG_BASE + '/user/posts');
-        u.searchParams.set('username', normalized);
-        u.searchParams.set('count', String(perPage));
-        u.searchParams.set('start', formatDate(winStart));
-        u.searchParams.set('end', formatDate(winEnd));
-        let j: any = null;
-        for (let attempt=0; attempt<2; attempt++) {
-          try { const r = await fetch(u.toString(), { headers:{Accept:'application/json'}, cache:'no-store' }); if (r.ok) { j = await r.json().catch(()=>null); break; } } catch {}
-          await sleep(200*(attempt+1));
-        }
-        const vlist: any[] = Array.isArray(j?.data?.videos) ? j.data.videos : [];
-        const before = out2.length;
-        for (const v of vlist) {
-          const vid = v.aweme_id || v.video_id || v.id; const key = String(vid||''); if (!key || seen2.has(key)) continue;
-          const ts = v.create_time ?? v.createTime ?? v.create_time_utc ?? v.create_date;
-          const ms = typeof ts==='number' ? (ts>1e12?ts:ts*1000) : Number(ts)>0 ? (Number(ts)>1e12?Number(ts):Number(ts)*1000) : Date.parse(ts);
-          const d = new Date(ms); if (isNaN(d.getTime())) continue;
-          if (d < start || d > end) continue;
-          seen2.add(key); out2.push(v);
-        }
-        const added = out2.length - before; newAdded += added;
-        if (added === 0) cursorStallCount += 1; else cursorStallCount = 0;
-        if (cursorStallCount >= 3) break;
-        // move window back
-        winEnd = new Date(winStart.getTime() - 1);
-        await sleep(200);
-      }
-      return out2;
+      // Rate limit
+      await sleep(1000);
     }
     return out;
   };
@@ -664,21 +614,15 @@ export async function GET(request: Request, context: any) {
   const fetchOnePage = async (cursor?: string): Promise<{ videos: any[]; hasMore: boolean; cursor?: string }> => {
     const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
     const perPage = clamp(Number(countParam ?? '100'), 20, 1000);
-    const apiUrlObj = new URL(AGG_BASE + '/user/posts');
-    apiUrlObj.searchParams.set('username', normalized);
-    apiUrlObj.searchParams.set('count', String(perPage));
-    if (startParam) apiUrlObj.searchParams.set('start', startParam);
-    if (endParam) apiUrlObj.searchParams.set('end', endParam);
-    if (cursor) apiUrlObj.searchParams.set('cursor', cursor);
+    const url = `https://${TIKTOK_RAPID_HOST}/user/posts?unique_id=@${encodeURIComponent(normalized)}&count=${perPage}${cursor ? `&cursor=${cursor}` : ''}`;
     let json: any = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const r = await fetch(apiUrlObj.toString(), { headers: { Accept: 'application/json' }, cache: 'no-store' });
-        if (r.ok) { json = await r.json().catch(() => null); break; }
-      } catch {}
-      await new Promise((res) => setTimeout(res, 250 * (attempt + 1)));
+    try {
+      json = await rapidApiRequest({ url, method: 'GET', rapidApiHost: TIKTOK_RAPID_HOST, timeoutMs: 30000 });
+    } catch (err) {
+      console.error('[fetchOnePage] RapidAPI error:', err);
+      return { videos: [], hasMore: false };
     }
-    const list: any[] = Array.isArray(json?.data?.videos) ? json.data.videos : [];
+    const list: any[] = Array.isArray(json?.data?.videos) ? json.data.videos : (Array.isArray(json?.data?.aweme_list) ? json.data.aweme_list : []);
     const apiCursor = json?.data?.cursor ? String(json.data.cursor) : undefined;
     const minMs = list
       .map((v:any)=>v.create_time ?? v.createTime ?? v.create_time_utc ?? v.create_date)
@@ -725,14 +669,12 @@ export async function GET(request: Request, context: any) {
       // followers best-effort
       let followers = 0;
       try {
-        const infoUrl = new URL(AGG_BASE + '/user/info');
-        infoUrl.searchParams.set('username', normalized);
-        const infoRes = await fetch(infoUrl.toString(), { headers: { Accept: 'application/json' }, cache: 'no-store' });
-        if (infoRes.ok) {
-          const info = await infoRes.json().catch(() => null);
-          followers = Number(info?.data?.stats?.followerCount || 0) || 0;
-        }
-      } catch {}
+        const infoUrl = `https://${TIKTOK_RAPID_HOST}/user/info?unique_id=@${encodeURIComponent(normalized)}`;
+        const info = await rapidApiRequest({ url: infoUrl, method: 'GET', rapidApiHost: TIKTOK_RAPID_HOST, timeoutMs: 15000 });
+        followers = Number(info?.data?.stats?.followerCount || info?.userInfo?.stats?.followerCount || 0) || 0;
+      } catch (err) {
+        console.error('[pageMode] Failed to fetch followers:', err);
+      }
       // Persist summary
       await admin.from('social_metrics').upsert({ user_id: userId, platform: 'tiktok', followers, likes: totals.likes, views: totals.views, comments: totals.comments, shares: totals.shares, saves: totals.saves, last_updated: new Date().toISOString() }, { onConflict: 'user_id,platform' });
       try { await admin.from('social_metrics_history').insert({ user_id: userId, platform: 'tiktok', followers, likes: totals.likes, views: totals.views, comments: totals.comments, shares: totals.shares, saves: totals.saves, captured_at: new Date().toISOString() }); } catch {}
@@ -774,42 +716,9 @@ export async function GET(request: Request, context: any) {
           }
         }
       }
-      // As a last resort fallback (host tiktok-scraper7 or aggregator)
-      if (RAPID_FALLBACK_ON_429 && (telemetry?.rateLimited || videos.length <= 100)) {
-        // Try the legacy RapidAPI host (RAPIDAPI_TIKTOK_HOST) continuation path
-        const extraRapid = await rapidFetchAll();
-        if (Array.isArray(extraRapid) && extraRapid.length) {
-          const seen = new Set(videos.map((v:any)=> String(v.aweme_id||v.video_id||v.id||'')));
-          for (const v of extraRapid) { const k = String(v?.aweme_id||v?.video_id||v?.id||''); if (!k||seen.has(k)) continue; seen.add(k); videos.push(v); }
-        }
-        // Try aggregator directly and merge
-        try {
-          const agg = await fetchAllVideos();
-          if (Array.isArray(agg) && agg.length) {
-            const seen = new Set(videos.map((v:any)=> String(v.aweme_id||v.video_id||v.id||'')));
-            for (const v of agg) { const k = String(v?.aweme_id||v?.video_id||v?.id||''); if (!k||seen.has(k)) continue; seen.add(k); videos.push(v); }
-          }
-        } catch {}
-      }
-      if (videos.length === 0) {
-        // fallback to existing aggregator if Rapid failed entirely
-        videos = await fetchAllVideos();
-      }
     } else {
-      // Default behavior: external aggregator first
-      videos = await fetchAllVideos();
-    }
-    const farPastAllTime = !startBound || (Date.now() - startBound.getTime()) > 60*24*60*60*1000;
-    if (!DISABLE_RAPIDAPI_FALLBACK && !RAPID_CURSOR_ON && farPastAllTime && videos.length <= 100) {
-      const extra = await rapidFetchAll();
-      if (Array.isArray(extra) && extra.length) {
-        const seen = new Set(videos.map((v:any)=> String(v.aweme_id || v.video_id || v.id || '')));
-        for (const v of extra) {
-          const key = String(v?.aweme_id || v?.video_id || v?.id || '');
-          if (!key || seen.has(key)) continue;
-          seen.add(key); videos.push(v);
-        }
-      }
+      // Use RapidAPI directly
+      videos = await rapidFetchAll();
     }
     videos = await Promise.all(videos.map(async (v: any) => {
       const coreCount = readStat(v,'play') || readStat(v,'digg') || readStat(v,'comment');
@@ -856,17 +765,15 @@ export async function GET(request: Request, context: any) {
       }
     }
 
-    // Fetch followers from external user info endpoint
+    // Fetch user followers count from RapidAPI
     let followers = 0;
     try {
-      const infoUrl = new URL(AGG_BASE + '/user/info');
-      infoUrl.searchParams.set('username', normalized);
-      const infoRes = await fetch(infoUrl.toString(), { headers: { Accept: 'application/json' }, cache: 'no-store' });
-      if (infoRes.ok) {
-        const info = await infoRes.json().catch(() => null);
-        followers = Number(info?.data?.stats?.followerCount || 0) || 0;
-      }
-    } catch {}
+      const infoUrl = `https://${TIKTOK_RAPID_HOST}/user/info?unique_id=@${encodeURIComponent(normalized)}`;
+      const infoData = await rapidApiRequest({ url: infoUrl, method: 'GET', rapidApiHost: TIKTOK_RAPID_HOST, timeoutMs: 15000 });
+      followers = Number(infoData?.data?.stats?.followerCount || infoData?.userInfo?.stats?.followerCount || 0) || 0;
+    } catch (err) {
+      console.error('[fetch-metrics] Failed to fetch follower count from RapidAPI:', err);
+    }
 
     let tiktokData: any = { ...totals, followers };
     if (startBound && endBound) {
