@@ -303,7 +303,6 @@ export default function AdminPage() {
           batch_size: 1,      // SEQUENTIAL: 1 account at a time to avoid rate limits
           delay_ms: 8000,     // 8 seconds delay between each request
           only_with_user_id: true,
-          limit: 10,          // Process only 10 accounts per click (reduced from 30)
           include_details: true
         })
       });
@@ -334,9 +333,16 @@ export default function AdminPage() {
       setIgResults(j);
       setIgProgress({current: newProcessed.size, total: j.total_usernames || 0, success: newSession.totalSuccess, failed: newSession.totalFailed});
 
+      // Show message if provided
+      if (j.message) {
+        console.log('[Instagram Refresh]', j.message);
+      }
+
       // Check if there are more accounts to process
-      if (j.processed < j.usernames_with_ids && newProcessed.size < j.total_usernames) {
+      if (j.remaining > 0) {
         setShowIgContinueDialog(true);
+      } else {
+        alert(`✅ Semua ${j.total_usernames} akun Instagram berhasil di-refresh!`);
       }
     } catch (e: any) {
       alert('Error: ' + (e?.message || 'Gagal refresh Instagram'));
@@ -406,7 +412,6 @@ export default function AdminPage() {
           campaign_id: activeCampaignId,
           batch_size: 1,      // SEQUENTIAL: 1 account at a time to avoid rate limits
           delay_ms: 8000,     // 8 seconds delay between each request
-          limit: 10,          // Process only 10 accounts per click
           include_details: true
         })
       });
@@ -442,8 +447,13 @@ export default function AdminPage() {
       setTikTokResults(j);
       setTikTokProgress({current: newProcessed.size, total: j.total_usernames || 0, success: newSession.totalSuccess, failed: newSession.totalFailed});
 
+      // Show message if provided
+      if (j.message) {
+        console.log('[TikTok Refresh]', j.message);
+      }
+
       // Show continuation dialog if more accounts remain
-      if (j.processed < j.total_usernames && newProcessed.size < j.total_usernames) {
+      if (j.remaining > 0) {
         setShowTikTokContinueDialog(true);
       } else {
         alert(`✅ Semua ${newProcessed.size} akun TikTok berhasil di-refresh!`);

@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { createClient as createServerSSR } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60; // 60 seconds max for Vercel Pro
+export const maxDuration = 60; // 60 seconds - keep it safe
 
 function adminClient() {
   return createClient(
@@ -99,16 +99,13 @@ async function refreshHandler(req: Request) {
   const isPost = req.method === 'POST';
   const body = isPost ? await req.json().catch(() => ({})) : {};
   
-  // CRITICAL: Limit to max 5 usernames per request to avoid timeout
-  // For more usernames, call this endpoint multiple times
-  const maxUsernamesPerRequest = 5;
   const batchSize = Math.max(1, Math.min(100, Number(body?.batch_size || 1)));
   // GUARANTEED ZERO RATE LIMITS: 8 seconds delay (8x slower than limit)
   // Pro plan: 1 req/sec, with 8s delay = absolutely safe
   const delayMs = Math.max(0, Math.min(30000, Number(body?.delay_ms || 8000))); // Default 8 seconds
   const limit = Math.max(1, Math.min(10000, Number(body?.limit || 1000)));
   const onlyWithUserId = body?.only_with_user_id === true; // default FALSE - fetch all usernames
-  const offset = Math.max(0, Number(body?.offset || 0)); // For pagination
+  const maxAccountsPerRequest = 5; // CRITICAL: Max 5 accounts per request to avoid timeout
   
   // Get base URL for fetch-ig endpoint
   const protocol = req.headers.get('x-forwarded-proto') || 'http';
@@ -162,31 +159,17 @@ async function refreshHandler(req: Request) {
     });
   }
 
-  // CRITICAL: Apply offset and limit to prevent timeout
-  const paginatedUsernames = usernamesToFetch.slice(offset, offset + maxUsernamesPerRequest);
-  const hasMore = offset + maxUsernamesPerRequest < usernamesToFetch.length;
-  
-  if (paginatedUsernames.length === 0) {
-    return NextResponse.json({
-      total_usernames: allUsernames.length,
-      usernames_with_ids: usernamesToFetch.length,
-      offset,
-      processed: 0,
-      success: 0,
-      failed: 0,
-      has_more: false,
-      message: 'No more usernames to process at this offset'
-    });
-  }
-
   // Sequential fetch with delay between each request to avoid rate limits
   const results: FetchResult[] = [];
   let successCount = 0;
   let failedCount = 0;
-  const maxRetries = 1; // Reduced retries to avoid timeout
+  const maxRetries = 2; // Retry failed requests up to 2 times
   
-  for (let i = 0; i < paginatedUsernames.length; i++) {
-    const username = paginatedUsernames[i];
+  // CRITICAL: Limit to maxAccountsPerRequest to avoid timeout
+  const processLimit = Math.min(usernamesToFetch.length, maxAccountsPerRequest);
+  
+  for (let i = 0; i < processLimit; i++) {
+    const username = usernamesToFetch[i];
     
     // Retry logic for reliability - ZERO DATA LOSS
     let result: FetchResult | null = null;
@@ -225,7 +208,7 @@ async function refreshHandler(req: Request) {
     else failedCount++;
     
     // Delay after EACH request to avoid rate limits (except last one)
-    if (i < paginatedUsernames.length - 1 && delayMs > 0) {
+    if (i < processLimit - 1 && delayMs > 0) {
       await new Promise(resolve => setTimeout(resolve, delayMs));
     }
   }
@@ -254,17 +237,17 @@ async function refreshHandler(req: Request) {
   return NextResponse.json({
     total_usernames: allUsernames.length,
     usernames_with_ids: usernamesToFetch.length,
-    offset,
-    limit: maxUsernamesPerRequest,
     processed: results.length,
     success: successCount,
     failed: failedCount,
-    has_more: hasMore,
-    next_offset: hasMore ? offset + maxUsernamesPerRequest : null,
+    remaining: usernamesToFetch.length - processLimit,
     total_posts_inserted: totalPosts,
     total_views: totalViews,
     total_likes: totalLikes,
     avg_duration_ms: avgDuration,
+    message: processLimit < usernamesToFetch.length 
+      ? `Processed ${processLimit} of ${usernamesToFetch.length} accounts. Click refresh again to continue.`
+      : `All ${usernamesToFetch.length} accounts processed.`,
     batch_size: batchSize,
     delay_ms: delayMs,
     results: body?.include_details ? results : undefined,
@@ -279,10 +262,7 @@ async function refreshHandler(req: Request) {
       views: r.data?.instagram?.views || 0,
       likes: r.data?.instagram?.likes || 0,
       source: r.data?.source
-    })) : undefined,
-    message: hasMore 
-      ? `Processed ${results.length} usernames. Call again with offset=${offset + maxUsernamesPerRequest} to continue.`
-      : 'All usernames processed.'
+    })) : undefined
   });
 }
 

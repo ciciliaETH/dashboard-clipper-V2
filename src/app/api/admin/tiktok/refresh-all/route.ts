@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { createClient as createServerSSR } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 300; // 5 minutes for Vercel Pro
+export const maxDuration = 60; // 60 seconds - keep it safe
 
 function adminClient() {
   return createClient(
@@ -112,6 +112,7 @@ async function refreshHandler(req: Request) {
     // Pro plan: 1 req/sec, with 10s delay = absolutely safe
     const delayMs = Math.max(0, Math.min(30000, Number(body?.delay_ms || 10000))); // Default 10 seconds
     const limit = Math.max(1, Math.min(10000, Number(body?.limit || 1000)));
+    const maxAccountsPerRequest = 5; // CRITICAL: Max 5 accounts per request to avoid timeout
     
     // Get base URL for fetch-metrics endpoint
     const protocol = req.headers.get('x-forwarded-proto') || 'http';
@@ -168,7 +169,10 @@ async function refreshHandler(req: Request) {
   let failedCount = 0;
   const maxRetries = 2; // Retry failed requests up to 2 times
   
-  for (let i = 0; i < allUsernames.length; i++) {
+  // CRITICAL: Limit to maxAccountsPerRequest to avoid timeout
+  const processLimit = Math.min(allUsernames.length, maxAccountsPerRequest);
+  
+  for (let i = 0; i < processLimit; i++) {
     const username = allUsernames[i];
     const campaignIds = usernameToCampaigns.get(username) || [];
     
@@ -279,10 +283,14 @@ async function refreshHandler(req: Request) {
     processed: results.length,
     success: successCount,
     failed: failedCount,
+    remaining: allUsernames.length - processLimit,
     total_posts: totalPosts,
     total_views: totalViews,
     total_likes: totalLikes,
     avg_duration_ms: avgDuration,
+    message: processLimit < allUsernames.length 
+      ? `Processed ${processLimit} of ${allUsernames.length} accounts. Click refresh again to continue.`
+      : `All ${allUsernames.length} accounts processed.`,
     results: body?.include_details ? results : undefined,
     failed_usernames: failedResults.length > 0 ? failedResults.map(r => ({
       username: r.username,
