@@ -100,12 +100,13 @@ async function refreshHandler(req: Request) {
   const body = isPost ? await req.json().catch(() => ({})) : {};
   
   const batchSize = Math.max(1, Math.min(100, Number(body?.batch_size || 1)));
-  // GUARANTEED ZERO RATE LIMITS: 8 seconds delay (8x slower than limit)
-  // Pro plan: 1 req/sec, with 8s delay = absolutely safe
-  const delayMs = Math.max(0, Math.min(30000, Number(body?.delay_ms || 8000))); // Default 8 seconds
+  // GUARANTEED ZERO RATE LIMITS: 5 seconds delay (5x slower than limit)
+  // Pro plan: 1 req/sec, with 5s delay = safe with faster processing
+  const delayMs = Math.max(0, Math.min(30000, Number(body?.delay_ms || 5000))); // Default 5 seconds
   const limit = Math.max(1, Math.min(10000, Number(body?.limit || 1000)));
   const onlyWithUserId = body?.only_with_user_id === true; // default FALSE - fetch all usernames
-  const maxAccountsPerRequest = 5; // CRITICAL: Max 5 accounts per request to avoid timeout
+  const accountsPerBatch = 5; // Process 5 accounts per batch, then auto-continue
+  const autoContinue = body?.auto_continue !== false; // default TRUE - auto process all accounts
   
   // Get base URL for fetch-ig endpoint
   const protocol = req.headers.get('x-forwarded-proto') || 'http';
@@ -160,72 +161,121 @@ async function refreshHandler(req: Request) {
   }
 
   // Sequential fetch with delay between each request to avoid rate limits
-  const results: FetchResult[] = [];
-  let successCount = 0;
-  let failedCount = 0;
+  const allResults: FetchResult[] = [];
+  const batchProgress: Array<{
+    batch: number;
+    accounts: string[];
+    success: number;
+    failed: number;
+    duration_ms: number;
+  }> = [];
+  
+  let totalSuccess = 0;
+  let totalFailed = 0;
   const maxRetries = 2; // Retry failed requests up to 2 times
   
-  // CRITICAL: Limit to maxAccountsPerRequest to avoid timeout
-  const processLimit = Math.min(usernamesToFetch.length, maxAccountsPerRequest);
+  // AUTO-CONTINUE: Process ALL accounts in batches
+  const totalBatches = Math.ceil(usernamesToFetch.length / accountsPerBatch);
   
-  for (let i = 0; i < processLimit; i++) {
-    const username = usernamesToFetch[i];
+  for (let batchNum = 0; batchNum < totalBatches; batchNum++) {
+    const batchStart = batchNum * accountsPerBatch;
+    const batchEnd = Math.min(batchStart + accountsPerBatch, usernamesToFetch.length);
+    const batchUsernames = usernamesToFetch.slice(batchStart, batchEnd);
     
-    // Retry logic for reliability - ZERO DATA LOSS
-    let result: FetchResult | null = null;
-    let attempt = 0;
+    const batchStartTime = Date.now();
+    const batchResults: FetchResult[] = [];
+    let batchSuccess = 0;
+    let batchFailed = 0;
     
-    while (attempt <= maxRetries) {
-      result = await fetchInstagramData(username, baseUrl);
+    console.log(`[Instagram Refresh] Batch ${batchNum + 1}/${totalBatches}: Processing ${batchUsernames.join(', ')}`);
+    
+    for (let i = 0; i < batchUsernames.length; i++) {
+      const username = batchUsernames[i];
       
-      // Success - break retry loop
-      if (result.ok) {
+      // Retry logic for reliability - ZERO DATA LOSS
+      let result: FetchResult | null = null;
+      let attempt = 0;
+      
+      while (attempt <= maxRetries) {
+        result = await fetchInstagramData(username, baseUrl);
+        
+        // Success - break retry loop
+        if (result.ok) {
+          break;
+        }
+        
+        // If rate limited, wait longer before retry
+        if (result.status === 429 && attempt < maxRetries) {
+          console.log(`[Instagram Refresh] Rate limited on ${username}, waiting 30s before retry ${attempt + 1}/${maxRetries}`);
+          await new Promise(resolve => setTimeout(resolve, 30000)); // Wait 30 seconds
+          attempt++;
+          continue;
+        }
+        
+        // If server error or timeout, retry with delay
+        if ((result.status >= 500 || result.status === 408) && attempt < maxRetries) {
+          console.log(`[Instagram Refresh] Error ${result.status} on ${username}, retrying ${attempt + 1}/${maxRetries}`);
+          await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
+          attempt++;
+          continue;
+        }
+        
+        // Other errors - break and record as failed
         break;
       }
       
-      // If rate limited, wait longer before retry
-      if (result.status === 429 && attempt < maxRetries) {
-        console.log(`[Instagram Refresh] Rate limited on ${username}, waiting 30s before retry ${attempt + 1}/${maxRetries}`);
-        await new Promise(resolve => setTimeout(resolve, 30000)); // Wait 30 seconds
-        attempt++;
-        continue;
+      batchResults.push(result!);
+      allResults.push(result!);
+      
+      if (result!.ok) {
+        batchSuccess++;
+        totalSuccess++;
+      } else {
+        batchFailed++;
+        totalFailed++;
       }
       
-      // If server error or timeout, retry with delay
-      if ((result.status >= 500 || result.status === 408) && attempt < maxRetries) {
-        console.log(`[Instagram Refresh] Error ${result.status} on ${username}, retrying ${attempt + 1}/${maxRetries}`);
-        await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
-        attempt++;
-        continue;
+      // Delay after EACH request to avoid rate limits (except last one in batch)
+      if (i < batchUsernames.length - 1 && delayMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
       }
-      
-      // Other errors - break and record as failed
-      break;
     }
     
-    results.push(result!);
-    if (result!.ok) successCount++;
-    else failedCount++;
+    const batchDuration = Date.now() - batchStartTime;
+    batchProgress.push({
+      batch: batchNum + 1,
+      accounts: batchUsernames,
+      success: batchSuccess,
+      failed: batchFailed,
+      duration_ms: batchDuration
+    });
     
-    // Delay after EACH request to avoid rate limits (except last one)
-    if (i < processLimit - 1 && delayMs > 0) {
-      await new Promise(resolve => setTimeout(resolve, delayMs));
+    console.log(`[Instagram Refresh] Batch ${batchNum + 1}/${totalBatches} completed: ${batchSuccess} success, ${batchFailed} failed, ${Math.round(batchDuration/1000)}s`);
+    
+    // Small delay between batches (2 seconds)
+    if (batchNum < totalBatches - 1) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    
+    // If NOT auto-continue, stop after first batch
+    if (!autoContinue) {
+      break;
     }
   }
 
   // Aggregate statistics
-  const successResults = results.filter(r => r.ok);
-  const failedResults = results.filter(r => !r.ok);
+  const successResults = allResults.filter(r => r.ok);
+  const failedResults = allResults.filter(r => !r.ok);
   
   const totalPosts = successResults.reduce((sum, r) => sum + (r.data?.inserted || 0), 0);
   const totalViews = successResults.reduce((sum, r) => sum + (r.data?.instagram?.views || 0), 0);
   const totalLikes = successResults.reduce((sum, r) => sum + (r.data?.instagram?.likes || 0), 0);
-  const avgDuration = results.length > 0 
-    ? Math.round(results.reduce((sum, r) => sum + (r.duration_ms || 0), 0) / results.length)
+  const avgDuration = allResults.length > 0 
+    ? Math.round(allResults.reduce((sum, r) => sum + (r.duration_ms || 0), 0) / allResults.length)
     : 0;
 
   // Auto-refresh employee total metrics after successful refresh
-  if (successCount > 0) {
+  if (totalSuccess > 0) {
     try {
       await supa.rpc('refresh_employee_total_metrics');
       console.log('[Instagram Refresh] Employee metrics refreshed');
@@ -234,23 +284,33 @@ async function refreshHandler(req: Request) {
     }
   }
 
+  const processedCount = allResults.length;
+  const remainingCount = usernamesToFetch.length - processedCount;
+
   return NextResponse.json({
     total_usernames: allUsernames.length,
     usernames_with_ids: usernamesToFetch.length,
-    processed: results.length,
-    success: successCount,
-    failed: failedCount,
-    remaining: usernamesToFetch.length - processLimit,
+    total_batches: totalBatches,
+    batches_processed: batchProgress.length,
+    processed: processedCount,
+    success: totalSuccess,
+    failed: totalFailed,
+    remaining: remainingCount,
     total_posts_inserted: totalPosts,
     total_views: totalViews,
     total_likes: totalLikes,
     avg_duration_ms: avgDuration,
-    message: processLimit < usernamesToFetch.length 
-      ? `Processed ${processLimit} of ${usernamesToFetch.length} accounts. Click refresh again to continue.`
-      : `All ${usernamesToFetch.length} accounts processed.`,
+    auto_continue: autoContinue,
+    message: autoContinue 
+      ? `All ${processedCount} accounts processed in ${batchProgress.length} batches.`
+      : remainingCount > 0
+        ? `Processed ${processedCount} of ${usernamesToFetch.length} accounts. Click refresh again to continue.`
+        : `All ${usernamesToFetch.length} accounts processed.`,
+    batch_progress: batchProgress,
     batch_size: batchSize,
+    accounts_per_batch: accountsPerBatch,
     delay_ms: delayMs,
-    results: body?.include_details ? results : undefined,
+    results: body?.include_details ? allResults : undefined,
     failed_usernames: failedResults.length > 0 ? failedResults.map(r => ({ 
       username: r.username, 
       error: r.error,
