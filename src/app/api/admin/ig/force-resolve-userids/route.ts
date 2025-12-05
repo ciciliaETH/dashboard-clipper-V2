@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { rapidApiRequest } from '@/lib/rapidapi';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60; // 60 seconds to stay safe
 
 function adminClient() {
   return createClient(

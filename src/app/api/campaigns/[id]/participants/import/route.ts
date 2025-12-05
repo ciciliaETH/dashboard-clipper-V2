@@ -5,6 +5,7 @@ import * as XLSX from 'xlsx';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
+export const maxDuration = 60; // 60 seconds to stay safe
 
 function adminClient() {
   return createClient(

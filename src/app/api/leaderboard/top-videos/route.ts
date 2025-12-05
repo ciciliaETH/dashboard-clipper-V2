@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { hasRequiredHashtag } from '@/lib/hashtag-filter'
 
 export const dynamic = 'force-dynamic'
+export const maxDuration = 60; // 60 seconds to stay safe
 
 function supabaseAdmin() {
   return createClient(

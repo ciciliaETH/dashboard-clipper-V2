@@ -7,6 +7,7 @@ import { fetchAllProviders, fetchProfileData, fetchLinksData, IG_HOST, IG_SCRAPE
 import { resolveUserIdViaLink, resolveUserId } from './resolvers';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60; // 60 seconds to stay safe
 
 function admin() {
   return createAdmin(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);

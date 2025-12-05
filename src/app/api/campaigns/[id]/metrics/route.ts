@@ -5,6 +5,7 @@ import { endOfDay, parseISO, startOfDay } from 'date-fns';
 import { hasRequiredHashtag } from '@/lib/hashtag-filter';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60; // 60 seconds to stay safe
 
 function adminClient() {
   return createClient(
