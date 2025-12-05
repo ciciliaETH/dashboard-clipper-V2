@@ -108,11 +108,12 @@ async function refreshHandler(req: Request) {
     const isPost = req.method === 'POST';
     const body = isPost ? await req.json().catch(() => ({})) : {};
     
-    // GUARANTEED ZERO RATE LIMITS: 10 seconds delay (10x slower than limit)
-    // Pro plan: 1 req/sec, with 10s delay = absolutely safe
-    const delayMs = Math.max(0, Math.min(30000, Number(body?.delay_ms || 10000))); // Default 10 seconds
+    // GUARANTEED ZERO RATE LIMITS: 5 seconds delay (5x slower than limit)
+    // Pro plan: 1 req/sec, with 5s delay = safe with faster processing
+    const delayMs = Math.max(0, Math.min(30000, Number(body?.delay_ms || 5000))); // Default 5 seconds
     const limit = Math.max(1, Math.min(10000, Number(body?.limit || 1000)));
-    const maxAccountsPerRequest = 5; // CRITICAL: Max 5 accounts per request to avoid timeout
+    const accountsPerBatch = 5; // Process 5 accounts per batch, then auto-continue
+    const autoContinue = body?.auto_continue !== false; // default TRUE - auto process all accounts
     
     // Get base URL for fetch-metrics endpoint
     const protocol = req.headers.get('x-forwarded-proto') || 'http';
@@ -164,112 +165,157 @@ async function refreshHandler(req: Request) {
   }
 
   // Sequential fetch with delay between each request to avoid rate limits
-  const results: FetchResult[] = [];
-  let successCount = 0;
-  let failedCount = 0;
+  const allResults: FetchResult[] = [];
+  const batchProgress: Array<{
+    batch: number;
+    accounts: string[];
+    success: number;
+    failed: number;
+    duration_ms: number;
+  }> = [];
+  
+  let totalSuccess = 0;
+  let totalFailed = 0;
   const maxRetries = 2; // Retry failed requests up to 2 times
   
-  // CRITICAL: Limit to maxAccountsPerRequest to avoid timeout
-  const processLimit = Math.min(allUsernames.length, maxAccountsPerRequest);
+  // AUTO-CONTINUE: Process ALL accounts in batches
+  const totalBatches = Math.ceil(allUsernames.length / accountsPerBatch);
   
-  for (let i = 0; i < processLimit; i++) {
-    const username = allUsernames[i];
-    const campaignIds = usernameToCampaigns.get(username) || [];
+  for (let batchNum = 0; batchNum < totalBatches; batchNum++) {
+    const batchStart = batchNum * accountsPerBatch;
+    const batchEnd = Math.min(batchStart + accountsPerBatch, allUsernames.length);
+    const batchUsernames = allUsernames.slice(batchStart, batchEnd);
     
-    // Use a wide date range to get all data (last 6 months to today)
-    const endDate = new Date().toISOString().slice(0, 10);
-    const startDate = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const batchStartTime = Date.now();
+    const batchResults: FetchResult[] = [];
+    let batchSuccess = 0;
+    let batchFailed = 0;
     
-    // Use first campaign_id for the fetch (doesn't matter which, we get same TikTok data)
-    const campaignId = campaignIds[0] || 'default';
+    console.log(`[TikTok Refresh] Batch ${batchNum + 1}/${totalBatches}: Processing ${batchUsernames.join(', ')}`);
     
-    // Retry logic for reliability - ZERO DATA LOSS
-    let result: FetchResult | null = null;
-    let attempt = 0;
-    
-    while (attempt <= maxRetries) {
-      result = await fetchTikTokData(username, campaignId, startDate, endDate, baseUrl);
+    for (let i = 0; i < batchUsernames.length; i++) {
+      const username = batchUsernames[i];
+      const campaignIds = usernameToCampaigns.get(username) || [];
       
-      // Success - break retry loop
-      if (result.ok) {
+      // Use a wide date range to get all data (last 6 months to today)
+      const endDate = new Date().toISOString().slice(0, 10);
+      const startDate = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      
+      // Use first campaign_id for the fetch (doesn't matter which, we get same TikTok data)
+      const campaignId = campaignIds[0] || 'default';
+      
+      // Retry logic for reliability - ZERO DATA LOSS
+      let result: FetchResult | null = null;
+      let attempt = 0;
+      
+      while (attempt <= maxRetries) {
+        result = await fetchTikTokData(username, campaignId, startDate, endDate, baseUrl);
+        
+        // Success - break retry loop
+        if (result.ok) {
+          break;
+        }
+        
+        // If rate limited, wait longer before retry
+        if (result.status === 429 && attempt < maxRetries) {
+          console.log(`[TikTok Refresh] Rate limited on ${username}, waiting 30s before retry ${attempt + 1}/${maxRetries}`);
+          await new Promise(resolve => setTimeout(resolve, 30000)); // Wait 30 seconds
+          attempt++;
+          continue;
+        }
+        
+        // If server error or timeout, retry with delay
+        if ((result.status >= 500 || result.status === 408) && attempt < maxRetries) {
+          console.log(`[TikTok Refresh] Error ${result.status} on ${username}, retrying ${attempt + 1}/${maxRetries}`);
+          await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
+          attempt++;
+          continue;
+        }
+        
+        // Other errors - break and record as failed
         break;
       }
       
-      // If rate limited, wait longer before retry
-      if (result.status === 429 && attempt < maxRetries) {
-        console.log(`[TikTok Refresh] Rate limited on ${username}, waiting 30s before retry ${attempt + 1}/${maxRetries}`);
-        await new Promise(resolve => setTimeout(resolve, 30000)); // Wait 30 seconds
-        attempt++;
-        continue;
-      }
-      
-      // If server error or timeout, retry with delay
-      if ((result.status >= 500 || result.status === 408) && attempt < maxRetries) {
-        console.log(`[TikTok Refresh] Error ${result.status} on ${username}, retrying ${attempt + 1}/${maxRetries}`);
-        await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
-        attempt++;
-        continue;
-      }
-      
-      // Other errors - break and record as failed
-      break;
-    }
-    
-    // Update ALL campaigns that have this username - CRITICAL: Save data immediately
-    if (result && result.ok && result.data?.tiktok) {
-      const t = result.data.tiktok;
-      
-      for (const cid of campaignIds) {
-        const { error: upsertError } = await supa
-          .from('campaign_participants')
-          .upsert({
-            campaign_id: cid,
-            tiktok_username: username,
-            followers: Number(t.followers) || 0,
-            views: Number(t.views) || 0,
-            likes: Number(t.likes) || 0,
-            comments: Number(t.comments) || 0,
-            shares: Number(t.shares) || 0,
-            saves: Number(t.saves) || 0,
-            posts_total: Number(t.posts_total) || 0,
-            sec_uid: t.secUid || t.sec_uid || null,
-            metrics_json: result.data,
-            last_refreshed: new Date().toISOString(),
-          }, { onConflict: 'campaign_id,tiktok_username' });
+      // Update ALL campaigns that have this username - CRITICAL: Save data immediately
+      if (result && result.ok && result.data?.tiktok) {
+        const t = result.data.tiktok;
         
-        if (upsertError) {
-          console.error(`[TikTok Refresh] Failed to save ${username} in campaign ${cid}:`, upsertError);
+        for (const cid of campaignIds) {
+          const { error: upsertError } = await supa
+            .from('campaign_participants')
+            .upsert({
+              campaign_id: cid,
+              tiktok_username: username,
+              followers: Number(t.followers) || 0,
+              views: Number(t.views) || 0,
+              likes: Number(t.likes) || 0,
+              comments: Number(t.comments) || 0,
+              shares: Number(t.shares) || 0,
+              saves: Number(t.saves) || 0,
+              posts_total: Number(t.posts_total) || 0,
+              sec_uid: t.secUid || t.sec_uid || null,
+              metrics_json: result.data,
+              last_refreshed: new Date().toISOString(),
+            }, { onConflict: 'campaign_id,tiktok_username' });
+          
+          if (upsertError) {
+            console.error(`[TikTok Refresh] Failed to save ${username} in campaign ${cid}:`, upsertError);
+          }
         }
+        
+        batchSuccess++;
+        totalSuccess++;
+      } else {
+        batchFailed++;
+        totalFailed++;
       }
       
-      successCount++;
-    } else {
-      failedCount++;
+      if (result) {
+        batchResults.push(result);
+        allResults.push(result);
+      }
+      
+      // Delay after EACH request to avoid rate limits (except last one in batch)
+      if (i < batchUsernames.length - 1 && delayMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
     }
     
-    if (result) {
-      results.push(result);
+    const batchDuration = Date.now() - batchStartTime;
+    batchProgress.push({
+      batch: batchNum + 1,
+      accounts: batchUsernames,
+      success: batchSuccess,
+      failed: batchFailed,
+      duration_ms: batchDuration
+    });
+    
+    console.log(`[TikTok Refresh] Batch ${batchNum + 1}/${totalBatches} completed: ${batchSuccess} success, ${batchFailed} failed, ${Math.round(batchDuration/1000)}s`);
+    
+    // Small delay between batches (2 seconds)
+    if (batchNum < totalBatches - 1) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
     }
     
-    // Delay after EACH request to avoid rate limits (except last one)
-    if (i < allUsernames.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, delayMs));
+    // If NOT auto-continue, stop after first batch
+    if (!autoContinue) {
+      break;
     }
   }
 
   // Aggregate statistics
-  const successResults = results.filter(r => r && r.ok);
-  const failedResults = results.filter(r => r && !r.ok);
+  const successResults = allResults.filter(r => r && r.ok);
+  const failedResults = allResults.filter(r => r && !r.ok);
   
   const totalPosts = successResults.reduce((sum, r) => sum + (r?.data?.tiktok?.posts_total || 0), 0);
   const totalViews = successResults.reduce((sum, r) => sum + (r?.data?.tiktok?.views || 0), 0);
   const totalLikes = successResults.reduce((sum, r) => sum + (r?.data?.tiktok?.likes || 0), 0);
-  const avgDuration = results.length > 0 
-    ? Math.round(results.reduce((sum, r) => sum + (r.duration_ms || 0), 0) / results.length)
+  const avgDuration = allResults.length > 0 
+    ? Math.round(allResults.reduce((sum, r) => sum + (r.duration_ms || 0), 0) / allResults.length)
     : 0;
 
   // Auto-refresh employee total metrics after successful refresh
-  if (successCount > 0) {
+  if (totalSuccess > 0) {
     try {
       await supa.rpc('refresh_employee_total_metrics');
       console.log('[TikTok Refresh] Employee metrics refreshed');
@@ -278,20 +324,30 @@ async function refreshHandler(req: Request) {
     }
   }
 
+  const processedCount = allResults.length;
+  const remainingCount = allUsernames.length - processedCount;
+
   return NextResponse.json({
     total_usernames: allUsernames.length,
-    processed: results.length,
-    success: successCount,
-    failed: failedCount,
-    remaining: allUsernames.length - processLimit,
+    total_batches: totalBatches,
+    batches_processed: batchProgress.length,
+    processed: processedCount,
+    success: totalSuccess,
+    failed: totalFailed,
+    remaining: remainingCount,
     total_posts: totalPosts,
     total_views: totalViews,
     total_likes: totalLikes,
     avg_duration_ms: avgDuration,
-    message: processLimit < allUsernames.length 
-      ? `Processed ${processLimit} of ${allUsernames.length} accounts. Click refresh again to continue.`
-      : `All ${allUsernames.length} accounts processed.`,
-    results: body?.include_details ? results : undefined,
+    auto_continue: autoContinue,
+    message: autoContinue 
+      ? `All ${processedCount} accounts processed in ${batchProgress.length} batches.`
+      : remainingCount > 0
+        ? `Processed ${processedCount} of ${allUsernames.length} accounts. Click refresh again to continue.`
+        : `All ${allUsernames.length} accounts processed.`,
+    batch_progress: batchProgress,
+    accounts_per_batch: accountsPerBatch,
+    results: body?.include_details ? allResults : undefined,
     failed_usernames: failedResults.length > 0 ? failedResults.map(r => ({
       username: r.username,
       error: r.error,
