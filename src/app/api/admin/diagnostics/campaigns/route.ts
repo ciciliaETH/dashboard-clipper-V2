@@ -162,7 +162,7 @@ export async function GET(req: Request) {
         employee_groups: {
           count: egCount || 0
         },
-        issues: []
+        issues: [] as string[]
       });
       
       // Add warnings
