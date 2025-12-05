@@ -79,31 +79,46 @@ export async function POST(req: Request, context: any) {
     const igUsernames = Array.from(setIG).filter(Boolean)
     if (!igUsernames.length) return NextResponse.json({ updated: 0, results: [], message: 'No Instagram usernames found' })
 
-    // Call the deployed Edge Function `ig-refresh` with service role key
-    const funcUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/ig-refresh`
-    const headers: any = {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
-      'apikey': process.env.SUPABASE_SERVICE_ROLE_KEY || ''
-    }
-
+    // Call internal Next.js endpoint instead of Supabase Edge Function
+    // This is faster, more reliable, and uses less resources
+    const url = new URL(req.url)
+    const baseUrl = `${url.protocol}//${url.host}`
     const concurrency = Number(process.env.GROUP_REFRESH_CONCURRENCY || '4')
     const results: any[] = []
 
-    async function callChunk(chunk: string[]) {
+    // Process in batches to avoid overwhelming the system
+    async function refreshBatch(usernames: string[]) {
       try {
-        const bodyPayload: any = { usernames: chunk }
-        if (cleanup) bodyPayload.cleanup = cleanup
-        const res = await fetch(funcUrl, { method: 'POST', headers, body: JSON.stringify(bodyPayload) })
-        const j = await res.json().catch(()=>null)
-        return j || { error: 'no-response' }
-      } catch (e:any) { return { error: String(e?.message || e) } }
+        // Call internal fetch-ig endpoint for each username
+        const promises = usernames.map(async (username) => {
+          try {
+            const fetchUrl = `${baseUrl}/api/fetch-ig/${encodeURIComponent(username)}`
+            const res = await fetch(fetchUrl, {
+              headers: { 'Content-Type': 'application/json' }
+            })
+            const data = await res.json().catch(() => null)
+            return { username, ok: res.ok, status: res.status, data }
+          } catch (e: any) {
+            return { username, ok: false, error: String(e?.message || e) }
+          }
+        })
+        const batchResults = await Promise.all(promises)
+        return batchResults
+      } catch (e: any) {
+        return usernames.map(username => ({ username, ok: false, error: String(e?.message || e) }))
+      }
     }
 
+    // Process in chunks to control concurrency
     for (let i = 0; i < igUsernames.length; i += concurrency) {
       const chunk = igUsernames.slice(i, i + concurrency)
-      const r = await callChunk(chunk)
-      results.push(r)
+      const chunkResults = await refreshBatch(chunk)
+      results.push(...chunkResults)
+      
+      // Add delay between batches to avoid rate limits
+      if (i + concurrency < igUsernames.length) {
+        await new Promise(resolve => setTimeout(resolve, 2000)) // 2 second delay
+      }
     }
 
     // Aggregate totals from instagram_posts_daily for the requested time window (if provided)
