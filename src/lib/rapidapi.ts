@@ -70,16 +70,22 @@ export async function rapidApiRequest<T = any>(opts: RapidRequestOpts): Promise<
   } = opts;
 
   const primaryName = keysEnvName || 'RAPID_API_KEYS';
-  const keysRaw =
+  
+  // PREMIUM KEY PRIORITY: Always use RAPIDAPI_KEY first (premium account)
+  const premiumKey = process.env.RAPIDAPI_KEY?.trim() || '';
+  const rotationKeysRaw =
     process.env[primaryName] ||
     process.env.RAPIDAPI_KEYS ||
     process.env.RAPID_KEY_BACKFILL ||
-    process.env.RAPIDAPI_KEY ||
     '';
-  const keys = keysRaw
+  const rotationKeys = rotationKeysRaw
     .split(',')
     .map((s) => s.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter(k => k !== premiumKey); // Remove premium from rotation to avoid duplicate
+  
+  // Combine: premium first, then rotation keys
+  const keys = premiumKey ? [premiumKey, ...rotationKeys] : rotationKeys;
 
   if (keys.length === 0) {
     throw new Error(
@@ -87,10 +93,9 @@ export async function rapidApiRequest<T = any>(opts: RapidRequestOpts): Promise<
     );
   }
 
-  // Choose a starting index to roughly round-robin across keys
-  const bucket = Math.floor(Date.now() / (10 * 60 * 1000)); // 10-min buckets
-  const seed = (bucket + stableHash(url)) >>> 0;
-  let start = seed % keys.length;
+  // PREMIUM KEY FIRST: Always try index 0 (premium) before rotating
+  // Only rotate to other keys if premium is on cooldown
+  let start = 0; // Start with premium key (index 0)
 
   const errors: string[] = [];
   const now = Date.now();

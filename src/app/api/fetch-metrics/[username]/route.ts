@@ -368,9 +368,9 @@ export async function GET(request: Request, context: any) {
   const fetchAllVideos = async (): Promise<any[]> => {
     const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
     const perPage = clamp(Number(countParam ?? '100'), 20, 1000);
-    // pages: 0 = unlimited
-    let maxPages = Number(process.env.USER_REFRESH_MAX_PAGES || '6');
-    if (allParam === '1') maxPages = 0;
+    // pages: 0 = unlimited (CURSOR MODE ENABLED BY DEFAULT)
+    let maxPages = 0; // Default unlimited untuk dapat semua video
+    if (allParam === '0') maxPages = Number(process.env.USER_REFRESH_MAX_PAGES || '6'); // Reverse: all=0 untuk limit
     if (pagesParam !== null) {
       const p = Number(pagesParam);
       if (!Number.isNaN(p)) maxPages = p;
@@ -515,9 +515,9 @@ export async function GET(request: Request, context: any) {
     return { list: out, telemetry };
   };
 
-  // RapidAPI API15: getUserVideos with cursor paging
+  // RapidAPI tiktok-scraper7: getUserVideos with cursor paging
   const rapidApi15CursorFetchAll = async (): Promise<{ list: any[]; telemetry: any } | any[]> => {
-    const host = process.env.RAPIDAPI_API15_HOST || 'tiktok-api15.p.rapidapi.com';
+    const host = process.env.RAPIDAPI_TIKTOK_HOST || 'tiktok-scraper7.p.rapidapi.com';
     const sleep = (ms:number)=> new Promise(res=>setTimeout(res, ms));
     const seen = new Set<string>();
     const out: any[] = [];
@@ -532,9 +532,9 @@ export async function GET(request: Request, context: any) {
 
     while (hasMore && page < RAPID_CURSOR_MAX_ITER) {
       page += 1;
-      const url = new URL(`https://${host}/index/Tiktok/getUserVideos`);
-      // unique_id perlu menyertakan '@'
-      url.searchParams.set('unique_id', '@' + normalized);
+      const url = new URL(`https://${host}/user/posts`);
+      // username tanpa '@' untuk tiktok-scraper7
+      url.searchParams.set('username', normalized);
       url.searchParams.set('count', String(count));
       if (cursor !== null && cursor !== undefined) url.searchParams.set('cursor', String(cursor));
 
@@ -569,7 +569,7 @@ export async function GET(request: Request, context: any) {
       const tb = Number(b?.create_time || b?.createTime || 0);
       return ta - tb;
     });
-    const telemetry = { mode: 'rapid_api15', username: normalized, pages: pageSummaries, stats: { totalPages: pageSummaries.length, uniqueVideos: out.length }, rateLimited: saw429 };
+    const telemetry = { mode: 'rapid_scraper7', username: normalized, pages: pageSummaries, stats: { totalPages: pageSummaries.length, uniqueVideos: out.length }, rateLimited: saw429 };
     return { list: out, telemetry };
   };
 

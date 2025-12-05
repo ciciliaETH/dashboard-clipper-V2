@@ -21,7 +21,7 @@ async function fetchFromProvider(name: string, fetcher: () => Promise<any[]>): P
     } catch (e) {
       if (retry === 2) console.warn(`[fetch-ig] ${name} failed after 3 retries:`, (e as any)?.message);
     }
-    if (retry < 2) await new Promise(r => setTimeout(r, 500 * (retry + 1)));
+    if (retry < 2) await new Promise(r => setTimeout(r, 1000 * (retry + 1))); // 1s, 2s delay (rate limit)
   }
   return { source: name, items: [] };
 }
@@ -80,7 +80,15 @@ export async function fetchAllProviders(userId: string): Promise<ProviderResult[
     })
   ];
   
-  return await Promise.all(providers);
+  // SEQUENTIAL EXECUTION with 1s delay to avoid rate limit (Premium: 1 req/sec)
+  const results: ProviderResult[] = [];
+  for (const provider of providers) {
+    const result = await provider;
+    results.push(result);
+    if (result.items.length > 0) break; // Stop if provider succeeds
+    await new Promise(r => setTimeout(r, 1000)); // 1 second delay
+  }
+  return results;
 }
 
 export async function fetchProfileData(norm: string): Promise<any[]> {
