@@ -5,10 +5,12 @@
 --   - Video posted Aug 1 with 5M views → counts ALL 5M if posted in range
 --   - Video posted before range → does NOT count
 --
--- ACCRUAL MODE: Shows GROWTH/DELTA within date range (regardless of post date)
---   - Video posted Aug 1: had 2M on start date, now 5M → counts +3M growth
---   - Old video goes viral in last 7 days: +2M → counts the +2M
---   - Shows: Last snapshot - First snapshot in the timeframe
+-- ACCRUAL MODE: Shows DAILY INCREMENTS summed within date range (regardless of post date)
+--   - Day 1: Account has +1M views → count +1M
+--   - Day 2: Account has +500K views → count +500K
+--   - Day 3: Account has +200M views (viral!) → count +200M
+--   - Total accrual: 1M + 500K + 200M = 201.5M
+--   - Works by comparing CONSECUTIVE daily snapshots (today - yesterday)
 
 -- ============================================================================
 -- 1. FIX: campaign_participant_totals_v2 (TikTok)
@@ -30,40 +32,42 @@ RETURNS TABLE (
 ) AS $$
 BEGIN
   IF p_mode = 'accrual' THEN
-    -- ACCRUAL MODE: Calculate GROWTH (delta between first and last snapshot in range)
+    -- ACCRUAL MODE: Sum DAILY INCREMENTS (today - yesterday) for each video
+    -- This shows the daily growth rate, not total delta
     RETURN QUERY
-    WITH snapshot_deltas AS (
+    WITH daily_increments AS (
       SELECT 
         s.tiktok_username,
         s.aweme_id,
-        -- Get first and last snapshot values in the date range
-        FIRST_VALUE(s.play_count) OVER (PARTITION BY s.tiktok_username, s.aweme_id ORDER BY s.snapshot_date ASC) as first_views,
-        LAST_VALUE(s.play_count) OVER (PARTITION BY s.tiktok_username, s.aweme_id ORDER BY s.snapshot_date ASC ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as last_views,
-        FIRST_VALUE(s.digg_count) OVER (PARTITION BY s.tiktok_username, s.aweme_id ORDER BY s.snapshot_date ASC) as first_likes,
-        LAST_VALUE(s.digg_count) OVER (PARTITION BY s.tiktok_username, s.aweme_id ORDER BY s.snapshot_date ASC ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as last_likes,
-        FIRST_VALUE(s.comment_count) OVER (PARTITION BY s.tiktok_username, s.aweme_id ORDER BY s.snapshot_date ASC) as first_comments,
-        LAST_VALUE(s.comment_count) OVER (PARTITION BY s.tiktok_username, s.aweme_id ORDER BY s.snapshot_date ASC ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as last_comments,
-        FIRST_VALUE(s.share_count) OVER (PARTITION BY s.tiktok_username, s.aweme_id ORDER BY s.snapshot_date ASC) as first_shares,
-        LAST_VALUE(s.share_count) OVER (PARTITION BY s.tiktok_username, s.aweme_id ORDER BY s.snapshot_date ASC ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as last_shares,
-        FIRST_VALUE(s.save_count) OVER (PARTITION BY s.tiktok_username, s.aweme_id ORDER BY s.snapshot_date ASC) as first_saves,
-        LAST_VALUE(s.save_count) OVER (PARTITION BY s.tiktok_username, s.aweme_id ORDER BY s.snapshot_date ASC ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as last_saves,
-        ROW_NUMBER() OVER (PARTITION BY s.tiktok_username, s.aweme_id ORDER BY s.snapshot_date DESC) as rn
+        s.snapshot_date,
+        s.play_count,
+        s.digg_count,
+        s.comment_count,
+        s.share_count,
+        s.save_count,
+        -- Get previous day's values using LAG
+        LAG(s.play_count) OVER (PARTITION BY s.tiktok_username, s.aweme_id ORDER BY s.snapshot_date) as prev_views,
+        LAG(s.digg_count) OVER (PARTITION BY s.tiktok_username, s.aweme_id ORDER BY s.snapshot_date) as prev_likes,
+        LAG(s.comment_count) OVER (PARTITION BY s.tiktok_username, s.aweme_id ORDER BY s.snapshot_date) as prev_comments,
+        LAG(s.share_count) OVER (PARTITION BY s.tiktok_username, s.aweme_id ORDER BY s.snapshot_date) as prev_shares,
+        LAG(s.save_count) OVER (PARTITION BY s.tiktok_username, s.aweme_id ORDER BY s.snapshot_date) as prev_saves
       FROM campaign_participants_snapshot s
       WHERE s.campaign_id = p_campaign_id
         AND s.snapshot_date >= p_start_date::date
         AND s.snapshot_date <= p_end_date::date
     )
     SELECT 
-      sd.tiktok_username,
-      SUM(GREATEST(0, sd.last_views - sd.first_views))::bigint as total_views,
-      SUM(GREATEST(0, sd.last_likes - sd.first_likes))::bigint as total_likes,
-      SUM(GREATEST(0, sd.last_comments - sd.first_comments))::bigint as total_comments,
-      SUM(GREATEST(0, sd.last_shares - sd.first_shares))::bigint as total_shares,
-      SUM(GREATEST(0, sd.last_saves - sd.first_saves))::bigint as total_saves,
-      COUNT(DISTINCT sd.aweme_id)::bigint as video_count
-    FROM snapshot_deltas sd
-    WHERE sd.rn = 1 -- Only process each video once
-    GROUP BY sd.tiktok_username;
+      di.tiktok_username,
+      -- Sum daily increments (only count positive growth)
+      SUM(GREATEST(0, di.play_count - COALESCE(di.prev_views, 0)))::bigint as total_views,
+      SUM(GREATEST(0, di.digg_count - COALESCE(di.prev_likes, 0)))::bigint as total_likes,
+      SUM(GREATEST(0, di.comment_count - COALESCE(di.prev_comments, 0)))::bigint as total_comments,
+      SUM(GREATEST(0, di.share_count - COALESCE(di.prev_shares, 0)))::bigint as total_shares,
+      SUM(GREATEST(0, di.save_count - COALESCE(di.prev_saves, 0)))::bigint as total_saves,
+      COUNT(DISTINCT di.aweme_id)::bigint as video_count
+    FROM daily_increments di
+    WHERE di.prev_views IS NOT NULL -- Skip first snapshot (no previous to compare)
+    GROUP BY di.tiktok_username;
     
   ELSE
     -- POST DATE MODE: Sum metrics from videos POSTED within date range
@@ -111,34 +115,36 @@ RETURNS TABLE (
 ) AS $$
 BEGIN
   IF p_mode = 'accrual' THEN
-    -- ACCRUAL MODE: Calculate GROWTH (delta between first and last snapshot in range)
+    -- ACCRUAL MODE: Sum DAILY INCREMENTS (today - yesterday) for each post
+    -- This shows the daily growth rate, not total delta
     RETURN QUERY
-    WITH snapshot_deltas AS (
+    WITH daily_increments AS (
       SELECT 
         s.instagram_username,
         s.shortcode,
-        -- Get first and last snapshot values in the date range
-        FIRST_VALUE(s.play_count) OVER (PARTITION BY s.instagram_username, s.shortcode ORDER BY s.snapshot_date ASC) as first_views,
-        LAST_VALUE(s.play_count) OVER (PARTITION BY s.instagram_username, s.shortcode ORDER BY s.snapshot_date ASC ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as last_views,
-        FIRST_VALUE(s.like_count) OVER (PARTITION BY s.instagram_username, s.shortcode ORDER BY s.snapshot_date ASC) as first_likes,
-        LAST_VALUE(s.like_count) OVER (PARTITION BY s.instagram_username, s.shortcode ORDER BY s.snapshot_date ASC ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as last_likes,
-        FIRST_VALUE(s.comment_count) OVER (PARTITION BY s.instagram_username, s.shortcode ORDER BY s.snapshot_date ASC) as first_comments,
-        LAST_VALUE(s.comment_count) OVER (PARTITION BY s.instagram_username, s.shortcode ORDER BY s.snapshot_date ASC ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as last_comments,
-        ROW_NUMBER() OVER (PARTITION BY s.instagram_username, s.shortcode ORDER BY s.snapshot_date DESC) as rn
+        s.snapshot_date,
+        s.play_count,
+        s.like_count,
+        s.comment_count,
+        -- Get previous day's values using LAG
+        LAG(s.play_count) OVER (PARTITION BY s.instagram_username, s.shortcode ORDER BY s.snapshot_date) as prev_views,
+        LAG(s.like_count) OVER (PARTITION BY s.instagram_username, s.shortcode ORDER BY s.snapshot_date) as prev_likes,
+        LAG(s.comment_count) OVER (PARTITION BY s.instagram_username, s.shortcode ORDER BY s.snapshot_date) as prev_comments
       FROM campaign_instagram_participants_snapshot s
       WHERE s.campaign_id = p_campaign_id
         AND s.snapshot_date >= p_start_date::date
         AND s.snapshot_date <= p_end_date::date
     )
     SELECT 
-      sd.instagram_username,
-      SUM(GREATEST(0, sd.last_views - sd.first_views))::bigint as total_views,
-      SUM(GREATEST(0, sd.last_likes - sd.first_likes))::bigint as total_likes,
-      SUM(GREATEST(0, sd.last_comments - sd.first_comments))::bigint as total_comments,
-      COUNT(DISTINCT sd.shortcode)::bigint as post_count
-    FROM snapshot_deltas sd
-    WHERE sd.rn = 1 -- Only process each post once
-    GROUP BY sd.instagram_username;
+      di.instagram_username,
+      -- Sum daily increments (only count positive growth)
+      SUM(GREATEST(0, di.play_count - COALESCE(di.prev_views, 0)))::bigint as total_views,
+      SUM(GREATEST(0, di.like_count - COALESCE(di.prev_likes, 0)))::bigint as total_likes,
+      SUM(GREATEST(0, di.comment_count - COALESCE(di.prev_comments, 0)))::bigint as total_comments,
+      COUNT(DISTINCT di.shortcode)::bigint as post_count
+    FROM daily_increments di
+    WHERE di.prev_views IS NOT NULL -- Skip first snapshot (no previous to compare)
+    GROUP BY di.instagram_username;
     
   ELSE
     -- POST DATE MODE: Sum metrics from posts POSTED within date range
