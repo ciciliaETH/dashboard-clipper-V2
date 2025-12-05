@@ -285,6 +285,11 @@ export default function AdminPage() {
   const [igResults, setIgResults] = useState<any>(null);
   const [showIgContinueDialog, setShowIgContinueDialog] = useState(false);
   const [igOffset, setIgOffset] = useState(0); // Track batch offset
+  const [igBatchSession, setIgBatchSession] = useState({
+    totalSuccess: 0,
+    totalFailed: 0,
+    processed: new Set<string>()
+  });
 
   const runIGBatch = async (continueSession = false) => {
     setRefreshingIG(true);
@@ -294,6 +299,7 @@ export default function AdminPage() {
       setIgOffset(0);
       setIgResults(null);
       setIgProgress(null);
+      setIgBatchSession({ totalSuccess: 0, totalFailed: 0, processed: new Set<string>() });
     }
 
     try {
@@ -332,6 +338,13 @@ export default function AdminPage() {
         failed: j.failed || 0
       });
 
+      // Update batch session stats
+      setIgBatchSession(prev => ({
+        totalSuccess: prev.totalSuccess + (j.success || 0),
+        totalFailed: prev.totalFailed + (j.failed || 0),
+        processed: new Set([...prev.processed, ...(j.processed_usernames || [])])
+      }));
+
       // Show message if provided
       if (j.message) {
         console.log('[Instagram Refresh]', j.message);
@@ -351,12 +364,17 @@ export default function AdminPage() {
     }
   };
 
-  // Smart batch refresh for TikTok with auto-continuation
+  // Smart batch refresh for TikTok with offset tracking
   const [refreshingTikTok, setRefreshingTikTok] = useState(false);
   const [tikTokProgress, setTikTokProgress] = useState<{current: number; total: number; success: number; failed: number} | null>(null);
   const [tikTokResults, setTikTokResults] = useState<any>(null);
   const [showTikTokContinueDialog, setShowTikTokContinueDialog] = useState(false);
   const [tikTokOffset, setTikTokOffset] = useState(0); // Track batch offset
+  const [tikTokBatchSession, setTikTokBatchSession] = useState({
+    totalSuccess: 0,
+    totalFailed: 0,
+    processed: new Set<string>()
+  });
 
   // Accrual backfill state
   const [runningAccrual, setRunningAccrual] = useState(false);
@@ -402,6 +420,7 @@ export default function AdminPage() {
       setTikTokOffset(0);
       setTikTokResults(null);
       setTikTokProgress(null);
+      setTikTokBatchSession({ totalSuccess: 0, totalFailed: 0, processed: new Set<string>() });
     }
 
     try {
@@ -445,6 +464,13 @@ export default function AdminPage() {
         success: j.success || 0, 
         failed: j.failed || 0
       });
+
+      // Update batch session stats
+      setTikTokBatchSession(prev => ({
+        totalSuccess: prev.totalSuccess + (j.success || 0),
+        totalFailed: prev.totalFailed + (j.failed || 0),
+        processed: new Set([...prev.processed, ...(j.processed_usernames || [])])
+      }));
 
       // Show message if provided
       if (j.message) {
