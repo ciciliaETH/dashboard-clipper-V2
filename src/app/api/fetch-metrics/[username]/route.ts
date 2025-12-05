@@ -344,7 +344,7 @@ export async function GET(request: Request, context: any) {
     try {
       const { data: inserted } = await admin
         .from('users')
-        .insert({ id: newId, username: normalized, tiktok_username: normalized, role: 'umum', email: `${normalized}@example.com`, is_hidden: true })
+        .insert({ id: newId, username: normalized, tiktok_username: normalized, role: 'umum', email: `${normalized}@example.com` })
         .select('id, tiktok_username, tiktok_sec_uid')
         .single();
       userData = inserted as any;

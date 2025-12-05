@@ -44,11 +44,40 @@ async function fetchInstagramData(username: string, baseUrl: string, timeout = 4
       });
       clearTimeout(timer);
       
-      const data = await res.json();
+      let data: any = null;
+      const contentType = res.headers.get('content-type');
+      
+      // Only parse as JSON if content-type is JSON
+      if (contentType && contentType.includes('application/json')) {
+        try {
+          data = await res.json();
+        } catch (parseErr) {
+          // JSON parse failed
+          const text = await res.text().catch(() => 'Unable to read response');
+          return { 
+            username, 
+            ok: false, 
+            status: res.status, 
+            error: `Invalid JSON response: ${text.substring(0, 100)}`,
+            duration_ms: Date.now() - start 
+          };
+        }
+      } else {
+        // Not JSON - read as text
+        const text = await res.text().catch(() => 'Unable to read response');
+        return { 
+          username, 
+          ok: false, 
+          status: res.status, 
+          error: `Non-JSON response (${contentType}): ${text.substring(0, 100)}`,
+          duration_ms: Date.now() - start 
+        };
+      }
+      
       const duration = Date.now() - start;
       
       if (!res.ok) {
-        return { username, ok: false, status: res.status, error: data.error || 'Failed', duration_ms: duration };
+        return { username, ok: false, status: res.status, error: data?.error || 'Failed', duration_ms: duration };
       }
       
       return { username, ok: true, status: 200, data, duration_ms: duration };

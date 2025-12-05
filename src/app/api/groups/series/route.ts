@@ -270,48 +270,16 @@ export async function GET(req: Request) {
 
     const aggInstagramSeries = async (handles: string[], startISO: string, endISO: string, interval: 'daily'|'weekly'|'monthly') => {
       if (!handles.length) return new Map<string, { views:number; likes:number; comments:number }>();
-      
-      // Fetch all snapshots
+      const map = new Map<string, { views:number; likes:number; comments:number }>();
       const base = supa.from('instagram_posts_daily')
-        .select('id, username, post_date, play_count, like_count, comment_count')
+        .select('username, post_date, play_count, like_count, comment_count')
         .in('username', handles)
         .gte('post_date', startISO)
-        .lte('post_date', endISO)
-        .order('id')
-        .order('post_date');
+        .lte('post_date', endISO);
       const { data: rows } = await base;
-      
-      // Group snapshots by post id
-      const postMap = new Map<string, any[]>();
       for (const r of rows||[]) {
-        const postId = String((r as any).id);
-        if (!postMap.has(postId)) postMap.set(postId, []);
-        postMap.get(postId)!.push(r);
-      }
-      
-      // Calculate accrual per post (delta from first to last snapshot)
-      const map = new Map<string, { views:number; likes:number; comments:number }>();
-      for (const [postId, snapshots] of postMap.entries()) {
-        if (snapshots.length === 0) continue;
-        
-        snapshots.sort((a: any, b: any) => new Date(a.post_date).getTime() - new Date(b.post_date).getTime());
-        const first = snapshots[0];
-        const last = snapshots[snapshots.length - 1];
-        
-        // Calculate accrual (delta)
-        const accrualViews = snapshots.length === 1
-          ? Number(last.play_count || 0)
-          : Math.max(0, Number(last.play_count || 0) - Number(first.play_count || 0));
-        const accrualLikes = snapshots.length === 1
-          ? Number(last.like_count || 0)
-          : Math.max(0, Number(last.like_count || 0) - Number(first.like_count || 0));
-        const accrualComments = snapshots.length === 1
-          ? Number(last.comment_count || 0)
-          : Math.max(0, Number(last.comment_count || 0) - Number(first.comment_count || 0));
-        
-        // Determine bucket date from last snapshot
         let key: string;
-        const dStr = String(last.post_date);
+        const dStr = String((r as any).post_date);
         if (interval === 'monthly') {
           const d = new Date(dStr+'T00:00:00Z');
           key = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString().slice(0,10);
@@ -323,15 +291,12 @@ export async function GET(req: Request) {
         } else {
           key = dStr;
         }
-        
-        // Add accrual to bucket
         const cur = map.get(key) || { views:0, likes:0, comments:0 };
-        cur.views += accrualViews;
-        cur.likes += accrualLikes;
-        cur.comments += accrualComments;
+        cur.views += Number((r as any).play_count)||0;
+        cur.likes += Number((r as any).like_count)||0;
+        cur.comments += Number((r as any).comment_count)||0;
         map.set(key, cur);
       }
-      
       return map;
     };
 

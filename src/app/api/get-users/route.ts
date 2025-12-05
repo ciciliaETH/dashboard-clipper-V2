@@ -4,17 +4,13 @@ import { createClient as createSSR } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: Request) {
+export async function GET() {
   // Verify admin session first
   const supabaseSSR = await createSSR();
   const { data: { user } } = await supabaseSSR.auth.getUser();
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const { data: me } = await supabaseSSR.from('users').select('role').eq('id', user.id).single();
   if (me?.role !== 'admin') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-
-  // Check if request wants to include hidden users
-  const url = new URL(req.url);
-  const includeHidden = url.searchParams.get('include_hidden') === '1';
 
   // Use service_role key for admin operations
   const supabaseAdmin = createClient(
@@ -25,18 +21,11 @@ export async function GET(req: Request) {
 
   // Only show real employees/admins; hide auto-created 'umum' placeholders from fetch jobs
   const allowedRoles = ['karyawan','leader','admin','super_admin'];
-  
-  let query = supabaseAdmin
+  const { data, error } = await supabaseAdmin
     .from('users')
     .select('*')
-    .in('role', allowedRoles);
-  
-  // Filter hidden users unless explicitly requested
-  if (!includeHidden) {
-    query = query.eq('is_hidden', false);
-  }
-  
-  const { data, error } = await query.order('full_name', { ascending: true });
+    .in('role', allowedRoles)
+    .order('full_name', { ascending: true });
 
   if (error) {
     console.error('Error fetching users with admin client:', error);

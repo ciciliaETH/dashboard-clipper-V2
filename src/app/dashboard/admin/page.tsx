@@ -4,8 +4,6 @@ import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { User } from '@/types';
 import { FaEdit, FaTrash, FaPlus, FaTimes } from 'react-icons/fa';
-import { FiEye, FiEyeOff } from 'react-icons/fi';
-import EmployeeAvatar from '@/components/EmployeeAvatar';
 
 export default function AdminPage() {
   const supabase = createClient();
@@ -29,14 +27,12 @@ export default function AdminPage() {
   const [tikInput, setTikInput] = useState('');
   const [igInput, setIgInput] = useState('');
   const [searchName, setSearchName] = useState('');
-  const [showHidden, setShowHidden] = useState(false);
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const url = showHidden ? '/api/get-users?include_hidden=1' : '/api/get-users';
-      const response = await fetch(url);
+      const response = await fetch('/api/get-users');
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || 'Gagal memuat data Karyawan.');
@@ -49,7 +45,7 @@ export default function AdminPage() {
     } finally {
       setLoading(false);
     }
-  }, [showHidden]);
+  }, []);
 
   useEffect(() => {
     loadUsers();
@@ -213,26 +209,6 @@ export default function AdminPage() {
     setCurrentUser(prev => prev ? { ...prev, [name]: value } : null);
   };
 
-  const toggleHideUser = async (userId: string, currentHiddenStatus: boolean) => {
-    try {
-      const newStatus = !currentHiddenStatus;
-      const res = await fetch('/api/admin/toggle-hide-user', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, isHidden: newStatus })
-      });
-      
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Gagal toggle hide user');
-      }
-      
-      await loadUsers();
-    } catch (e: any) {
-      alert(e.message || 'Gagal toggle hide user');
-    }
-  };
-
   // Backfill messages / details (used by group backfill)
   const [backfillMsg, setBackfillMsg] = useState<string | null>(null);
   const [backfillDetail, setBackfillDetail] = useState<any | null>(null);
@@ -320,69 +296,47 @@ export default function AdminPage() {
     }
 
     try {
-      let offset = continueSession ? igBatchSession.processed.size : 0;
-      let hasMore = true;
-      const newProcessed = new Set(igBatchSession.processed);
-      let totalSuccess = igBatchSession.totalSuccess;
-      let totalFailed = igBatchSession.totalFailed;
-      const allResults: any[] = [...igBatchSession.allResults];
+      const res = await fetch('/api/admin/ig/refresh-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          batch_size: 1,      // SEQUENTIAL: 1 account at a time to avoid rate limits
+          delay_ms: 8000,     // 8 seconds delay between each request
+          only_with_user_id: true,
+          limit: 10,          // Process only 10 accounts per click (reduced from 30)
+          include_details: true
+        })
+      });
       
-      // Auto-loop dengan pagination sampai selesai atau max 50 usernames per session
-      const maxPerSession = 50;
-      let processedThisSession = 0;
-      
-      while (hasMore && processedThisSession < maxPerSession) {
-        const res = await fetch('/api/admin/ig/refresh-all', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            batch_size: 1,
-            delay_ms: 8000,     // 8 seconds delay between requests
-            only_with_user_id: true,
-            offset,             // Use pagination offset
-            include_details: true
-          })
-        });
-        const j = await res.json();
-        if (!res.ok) throw new Error(j?.error || 'Gagal refresh Instagram');
-
-        // Update tracking
-        j.results?.forEach((r: any) => newProcessed.add(r.username));
-        totalSuccess += (j.success || 0);
-        totalFailed += (j.failed || 0);
-        allResults.push(j);
-        processedThisSession += j.processed || 0;
-        
-        // Update UI
-        setIgProgress({
-          current: newProcessed.size, 
-          total: j.total_usernames || 0, 
-          success: totalSuccess, 
-          failed: totalFailed
-        });
-        
-        // Check if more data exists
-        hasMore = j.has_more === true;
-        if (hasMore) {
-          offset = j.next_offset || (offset + (j.processed || 0));
-        }
+      // Handle non-JSON responses (errors)
+      const contentType = res.headers.get('content-type');
+      let j: any;
+      if (contentType && contentType.includes('application/json')) {
+        j = await res.json();
+      } else {
+        const text = await res.text();
+        throw new Error(`Server error (${res.status}): ${text.substring(0, 200)}`);
       }
       
-      // Save final session state
-      const finalSession = {
-        processed: newProcessed,
-        totalSuccess,
-        totalFailed,
-        allResults
-      };
-      setIgBatchSession(finalSession);
-      setIgResults(allResults[allResults.length - 1]);
+      if (!res.ok) throw new Error(j?.error || 'Gagal refresh Instagram');
 
-      // Show dialog if more remain
-      if (hasMore) {
+      // Update session data
+      const newProcessed = new Set(igBatchSession.processed);
+      j.results?.forEach((r: any) => newProcessed.add(r.username));
+      
+      const newSession = {
+        processed: newProcessed,
+        totalSuccess: igBatchSession.totalSuccess + (j.success || 0),
+        totalFailed: igBatchSession.totalFailed + (j.failed || 0),
+        allResults: [...igBatchSession.allResults, j]
+      };
+      setIgBatchSession(newSession);
+      setIgResults(j);
+      setIgProgress({current: newProcessed.size, total: j.total_usernames || 0, success: newSession.totalSuccess, failed: newSession.totalFailed});
+
+      // Check if there are more accounts to process
+      if (j.processed < j.usernames_with_ids && newProcessed.size < j.total_usernames) {
         setShowIgContinueDialog(true);
-      } else {
-        alert(`✅ Semua ${newProcessed.size} akun Instagram berhasil di-refresh!`);
       }
     } catch (e: any) {
       alert('Error: ' + (e?.message || 'Gagal refresh Instagram'));
@@ -443,72 +397,59 @@ export default function AdminPage() {
     }
 
     try {
-      let offset = continueSession ? tikTokBatchSession.processed.size : 0;
-      let hasMore = true;
-      const newProcessed = new Set(tikTokBatchSession.processed);
-      let totalSuccess = tikTokBatchSession.totalSuccess;
-      let totalFailed = tikTokBatchSession.totalFailed;
-      const allResults: any[] = [...tikTokBatchSession.allResults];
+      console.log('[TikTok Refresh] Starting refresh for campaign:', activeCampaignId);
       
-      // Auto-loop dengan pagination sampai selesai atau max 30 usernames per session
-      // TikTok lebih lambat (60s timeout per username) jadi limit lebih kecil
-      const maxPerSession = 30;
-      let processedThisSession = 0;
+      const res = await fetch('/api/admin/tiktok/refresh-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          campaign_id: activeCampaignId,
+          batch_size: 1,      // SEQUENTIAL: 1 account at a time to avoid rate limits
+          delay_ms: 8000,     // 8 seconds delay between each request
+          limit: 10,          // Process only 10 accounts per click
+          include_details: true
+        })
+      });
       
-      while (hasMore && processedThisSession < maxPerSession) {
-        const res = await fetch('/api/admin/tiktok/refresh-all', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            campaign_id: activeCampaignId,
-            batch_size: 1,
-            delay_ms: 10000,    // 10 seconds delay for TikTok
-            offset,             // Use pagination offset
-            include_details: true
-          })
-        });
-        const j = await res.json();
-        if (!res.ok) throw new Error(j?.error || 'Gagal refresh TikTok');
-
-        // Update tracking
-        j.results?.forEach((r: any) => newProcessed.add(r.username));
-        totalSuccess += (j.success || 0);
-        totalFailed += (j.failed || 0);
-        allResults.push(j);
-        processedThisSession += j.processed || 0;
-        
-        // Update UI
-        setTikTokProgress({
-          current: newProcessed.size, 
-          total: j.total_usernames || 0, 
-          success: totalSuccess, 
-          failed: totalFailed
-        });
-        
-        // Check if more data exists
-        hasMore = j.has_more === true;
-        if (hasMore) {
-          offset = j.next_offset || (offset + (j.processed || 0));
-        }
+      console.log('[TikTok Refresh] Response status:', res.status);
+      console.log('[TikTok Refresh] Content-Type:', res.headers.get('content-type'));
+      
+      // Handle non-JSON responses (errors)
+      const contentType = res.headers.get('content-type');
+      let j: any;
+      if (contentType && contentType.includes('application/json')) {
+        j = await res.json();
+        console.log('[TikTok Refresh] Response data:', j);
+      } else {
+        const text = await res.text();
+        console.error('[TikTok Refresh] Non-JSON response:', text.substring(0, 500));
+        throw new Error(`Server error (${res.status}): ${text.substring(0, 200)}`);
       }
       
-      // Save final session state
-      const finalSession = {
-        processed: newProcessed,
-        totalSuccess,
-        totalFailed,
-        allResults
-      };
-      setTikTokBatchSession(finalSession);
-      setTikTokResults(allResults[allResults.length - 1]);
+      if (!res.ok) throw new Error(j?.error || 'Gagal refresh TikTok');
 
-      // Show dialog if more remain
-      if (hasMore) {
+      // Update session data
+      const newProcessed = new Set(tikTokBatchSession.processed);
+      j.results?.forEach((r: any) => newProcessed.add(r.username));
+      
+      const newSession = {
+        processed: newProcessed,
+        totalSuccess: tikTokBatchSession.totalSuccess + (j.success || 0),
+        totalFailed: tikTokBatchSession.totalFailed + (j.failed || 0),
+        allResults: [...tikTokBatchSession.allResults, j]
+      };
+      setTikTokBatchSession(newSession);
+      setTikTokResults(j);
+      setTikTokProgress({current: newProcessed.size, total: j.total_usernames || 0, success: newSession.totalSuccess, failed: newSession.totalFailed});
+
+      // Show continuation dialog if more accounts remain
+      if (j.processed < j.total_usernames && newProcessed.size < j.total_usernames) {
         setShowTikTokContinueDialog(true);
       } else {
         alert(`✅ Semua ${newProcessed.size} akun TikTok berhasil di-refresh!`);
       }
     } catch (e: any) {
+      console.error('[TikTok Refresh] Error caught:', e);
       alert('Error: ' + (e?.message || 'Gagal refresh TikTok'));
     } finally {
       setRefreshingTikTok(false);
@@ -756,27 +697,17 @@ export default function AdminPage() {
       {loading && <p className="text-white/60">Memuat...</p>}
 
       <div className="glass rounded-2xl border border-white/10 overflow-x-auto">
-        <div className="p-4 flex items-center justify-between gap-3">
+        <div className="p-4 flex items-center gap-3">
           <input
             value={searchName}
             onChange={(e)=> setSearchName(e.target.value)}
             placeholder="Cari nama lengkap…"
             className="w-full max-w-md px-3 py-2 rounded-xl border border-white/10 bg-white/5 text-white"
           />
-          <label className="flex items-center gap-2 text-sm text-white/70 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={showHidden}
-              onChange={(e) => setShowHidden(e.target.checked)}
-              className="rounded border-white/20 bg-white/5 text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
-            />
-            <span>Tampilkan yang dihide</span>
-          </label>
         </div>
         <table className="min-w-full">
           <thead>
             <tr className="text-left text-xs uppercase tracking-wider text-white/60">
-              <th className="px-6 py-3">Foto</th>
               <th className="px-6 py-3">Nama Lengkap</th>
               <th className="px-6 py-3">Username</th>
               <th className="px-6 py-3">TikTok Usernames</th>
@@ -786,23 +717,9 @@ export default function AdminPage() {
             </tr>
           </thead>
           <tbody>
-            {users.filter(u => !searchName || String(u.full_name||'').toLowerCase().includes(searchName.toLowerCase())).map(user => {
-              const isHidden = (user as any).is_hidden === true;
-              return (
-              <tr key={user.id} className={`border-t border-white/10 hover:bg-white/5 ${isHidden ? 'opacity-60' : ''}`}>
-                <td className="px-6 py-4">
-                  <EmployeeAvatar profilePictureUrl={(user as any).profile_picture_url} username={user.username} size="sm" />
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm">
-                  <div className="flex items-center gap-2">
-                    <span className="text-white/90">{user.full_name}</span>
-                    {isHidden && (
-                      <span className="px-1.5 py-0.5 text-[10px] rounded border border-white/20 text-white/50 bg-white/5">
-                        Hidden
-                      </span>
-                    )}
-                  </div>
-                </td>
+            {users.filter(u => !searchName || String(u.full_name||'').toLowerCase().includes(searchName.toLowerCase())).map(user => (
+              <tr key={user.id} className="border-t border-white/10 hover:bg-white/5">
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-white/90">{user.full_name}</td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-white/70">{user.username}</td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-white/70">{[user.tiktok_username, ...(((user as any).extra_tiktok_usernames)||[])].filter(Boolean).join(', ') || '-'}</td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-white/70">{[((user as any).instagram_username), ...(((user as any).extra_instagram_usernames)||[])].filter(Boolean).join(', ') || '-'}</td>
@@ -814,13 +731,6 @@ export default function AdminPage() {
                   </span>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                  <button 
-                    onClick={() => toggleHideUser(user.id, isHidden)} 
-                    className="text-gray-300 hover:text-gray-200 mr-4"
-                    title={isHidden ? 'Unhide user' : 'Hide user'}
-                  >
-                    {isHidden ? <FiEyeOff /> : <FiEye />}
-                  </button>
                   <button onClick={() => openModalForEdit(user)} className="text-blue-300 hover:text-blue-200 mr-4">
                     <FaEdit />
                   </button>
@@ -829,8 +739,7 @@ export default function AdminPage() {
                   </button>
                 </td>
               </tr>
-              );
-            })}
+            ))}
           </tbody>
         </table>
       </div>

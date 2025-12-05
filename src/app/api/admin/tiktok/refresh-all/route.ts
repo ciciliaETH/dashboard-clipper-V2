@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { createClient as createServerSSR } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60; // 60 seconds max for Vercel Pro
+export const maxDuration = 300; // 5 minutes for Vercel Pro
 
 function adminClient() {
   return createClient(
@@ -48,15 +48,44 @@ async function fetchTikTokData(
       const res = await fetch(url, { 
         signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
-        cache: 'no-store'
+        method: 'GET'
       });
       clearTimeout(timer);
       
-      const data = await res.json();
+      let data: any = null;
+      const contentType = res.headers.get('content-type');
+      
+      // Only parse as JSON if content-type is JSON
+      if (contentType && contentType.includes('application/json')) {
+        try {
+          data = await res.json();
+        } catch (parseErr) {
+          // JSON parse failed
+          const text = await res.text().catch(() => 'Unable to read response');
+          return { 
+            username, 
+            ok: false, 
+            status: res.status, 
+            error: `Invalid JSON response: ${text.substring(0, 100)}`,
+            duration_ms: Date.now() - start 
+          };
+        }
+      } else {
+        // Not JSON - read as text
+        const text = await res.text().catch(() => 'Unable to read response');
+        return { 
+          username, 
+          ok: false, 
+          status: res.status, 
+          error: `Non-JSON response (${contentType}): ${text.substring(0, 100)}`,
+          duration_ms: Date.now() - start 
+        };
+      }
+      
       const duration = Date.now() - start;
       
       if (!res.ok) {
-        return { username, ok: false, status: res.status, error: data.error || 'Failed', duration_ms: duration };
+        return { username, ok: false, status: res.status, error: data?.error || 'Failed', duration_ms: duration };
       }
       
       return { username, ok: true, status: 200, data, duration_ms: duration };
@@ -74,40 +103,46 @@ async function fetchTikTokData(
 }
 
 async function refreshHandler(req: Request) {
-  const supa = adminClient();
-  const isPost = req.method === 'POST';
-  const body = isPost ? await req.json().catch(() => ({})) : {};
-  
-  // CRITICAL: Limit to max 3 usernames per request to avoid timeout
-  // TikTok fetch takes longer than Instagram (60s timeout per username)
-  const maxUsernamesPerRequest = 3;
-  // GUARANTEED ZERO RATE LIMITS: 10 seconds delay (10x slower than limit)
-  // Pro plan: 1 req/sec, with 10s delay = absolutely safe
-  const delayMs = Math.max(0, Math.min(30000, Number(body?.delay_ms || 10000))); // Default 10 seconds
-  const limit = Math.max(1, Math.min(10000, Number(body?.limit || 1000)));
-  const offset = Math.max(0, Number(body?.offset || 0)); // For pagination
-  
-  // Get base URL for fetch-metrics endpoint
-  const protocol = req.headers.get('x-forwarded-proto') || 'http';
-  const host = req.headers.get('host') || 'localhost:3000';
-  const baseUrl = `${protocol}://${host}`;
-  
-  // Get ALL unique TikTok usernames from ALL campaign_participants (no date filter!)
-  const { data: rows } = await supa
-    .from('campaign_participants')
-    .select('tiktok_username, campaign_id')
-    .not('tiktok_username', 'is', null)
-    .limit(limit);
-  
-  if (!rows || rows.length === 0) {
-    return NextResponse.json({ 
-      total_usernames: 0, 
-      processed: 0, 
-      success: 0, 
-      failed: 0,
-      message: 'No TikTok usernames found in campaign_participants'
-    });
-  }
+  try {
+    const supa = adminClient();
+    const isPost = req.method === 'POST';
+    const body = isPost ? await req.json().catch(() => ({})) : {};
+    
+    // GUARANTEED ZERO RATE LIMITS: 10 seconds delay (10x slower than limit)
+    // Pro plan: 1 req/sec, with 10s delay = absolutely safe
+    const delayMs = Math.max(0, Math.min(30000, Number(body?.delay_ms || 10000))); // Default 10 seconds
+    const limit = Math.max(1, Math.min(10000, Number(body?.limit || 1000)));
+    
+    // Get base URL for fetch-metrics endpoint
+    const protocol = req.headers.get('x-forwarded-proto') || 'http';
+    const host = req.headers.get('host') || 'localhost:3000';
+    const baseUrl = `${protocol}://${host}`;
+    
+    // Get ALL unique TikTok usernames from ALL campaign_participants (no date filter!)
+    const { data: rows, error: dbError } = await supa
+      .from('campaign_participants')
+      .select('tiktok_username, campaign_id')
+      .not('tiktok_username', 'is', null)
+      .limit(limit);
+    
+    if (dbError) {
+      console.error('[TikTok Refresh] Database error:', dbError);
+      return NextResponse.json({ 
+        error: 'Database error',
+        message: dbError.message,
+        details: dbError
+      }, { status: 500 });
+    }
+    
+    if (!rows || rows.length === 0) {
+      return NextResponse.json({ 
+        total_usernames: 0, 
+        processed: 0, 
+        success: 0, 
+        failed: 0,
+        message: 'No TikTok usernames found in campaign_participants'
+      });
+    }
 
   // Get unique usernames (one username might be in multiple campaigns)
   const allUsernames = Array.from(new Set(
@@ -127,30 +162,14 @@ async function refreshHandler(req: Request) {
     usernameToCampaigns.set(username, campaigns);
   }
 
-  // CRITICAL: Apply offset and limit to prevent timeout
-  const paginatedUsernames = allUsernames.slice(offset, offset + maxUsernamesPerRequest);
-  const hasMore = offset + maxUsernamesPerRequest < allUsernames.length;
-  
-  if (paginatedUsernames.length === 0) {
-    return NextResponse.json({
-      total_usernames: allUsernames.length,
-      offset,
-      processed: 0,
-      success: 0,
-      failed: 0,
-      has_more: false,
-      message: 'No more usernames to process at this offset'
-    });
-  }
-
   // Sequential fetch with delay between each request to avoid rate limits
   const results: FetchResult[] = [];
   let successCount = 0;
   let failedCount = 0;
-  const maxRetries = 1; // Reduced retries to avoid timeout
+  const maxRetries = 2; // Retry failed requests up to 2 times
   
-  for (let i = 0; i < paginatedUsernames.length; i++) {
-    const username = paginatedUsernames[i];
+  for (let i = 0; i < allUsernames.length; i++) {
+    const username = allUsernames[i];
     const campaignIds = usernameToCampaigns.get(username) || [];
     
     // Use a wide date range to get all data (last 6 months to today)
@@ -193,7 +212,7 @@ async function refreshHandler(req: Request) {
     }
     
     // Update ALL campaigns that have this username - CRITICAL: Save data immediately
-    if (result.ok && result.data?.tiktok) {
+    if (result && result.ok && result.data?.tiktok) {
       const t = result.data.tiktok;
       
       for (const cid of campaignIds) {
@@ -224,21 +243,23 @@ async function refreshHandler(req: Request) {
       failedCount++;
     }
     
-    results.push(result);
+    if (result) {
+      results.push(result);
+    }
     
     // Delay after EACH request to avoid rate limits (except last one)
-    if (i < paginatedUsernames.length - 1) {
+    if (i < allUsernames.length - 1) {
       await new Promise(resolve => setTimeout(resolve, delayMs));
     }
   }
 
   // Aggregate statistics
-  const successResults = results.filter(r => r.ok);
-  const failedResults = results.filter(r => !r.ok);
+  const successResults = results.filter(r => r && r.ok);
+  const failedResults = results.filter(r => r && !r.ok);
   
-  const totalPosts = successResults.reduce((sum, r) => sum + (r.data?.tiktok?.posts_total || 0), 0);
-  const totalViews = successResults.reduce((sum, r) => sum + (r.data?.tiktok?.views || 0), 0);
-  const totalLikes = successResults.reduce((sum, r) => sum + (r.data?.tiktok?.likes || 0), 0);
+  const totalPosts = successResults.reduce((sum, r) => sum + (r?.data?.tiktok?.posts_total || 0), 0);
+  const totalViews = successResults.reduce((sum, r) => sum + (r?.data?.tiktok?.views || 0), 0);
+  const totalLikes = successResults.reduce((sum, r) => sum + (r?.data?.tiktok?.likes || 0), 0);
   const avgDuration = results.length > 0 
     ? Math.round(results.reduce((sum, r) => sum + (r.duration_ms || 0), 0) / results.length)
     : 0;
@@ -255,13 +276,9 @@ async function refreshHandler(req: Request) {
 
   return NextResponse.json({
     total_usernames: allUsernames.length,
-    offset,
-    limit: maxUsernamesPerRequest,
     processed: results.length,
     success: successCount,
     failed: failedCount,
-    has_more: hasMore,
-    next_offset: hasMore ? offset + maxUsernamesPerRequest : null,
     total_posts: totalPosts,
     total_views: totalViews,
     total_likes: totalLikes,
@@ -271,11 +288,16 @@ async function refreshHandler(req: Request) {
       username: r.username,
       error: r.error,
       status: r.status
-    })) : undefined,
-    message: hasMore 
-      ? `Processed ${results.length} usernames. Call again with offset=${offset + maxUsernamesPerRequest} to continue.`
-      : 'All usernames processed.'
+    })) : undefined
   });
+  } catch (error: any) {
+    console.error('[refreshHandler] Unexpected error:', error);
+    return NextResponse.json({ 
+      error: 'Internal server error during refresh',
+      message: error.message || 'Unknown error',
+      details: error.toString()
+    }, { status: 500 });
+  }
 }
 
 export async function GET(req: Request) {

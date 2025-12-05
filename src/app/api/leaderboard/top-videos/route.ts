@@ -65,17 +65,15 @@ export async function GET(req: Request) {
     // Get usernames mapping
     const { data: users } = await supabase
       .from('users')
-      .select('id, full_name, username, tiktok_username, instagram_username, profile_picture_url')
+      .select('id, full_name, username, tiktok_username, instagram_username')
       .in('id', employeeIds)
-      .eq('is_hidden', false)
     
     const userMap = new Map<string, any>()
     for (const u of users || []) {
       userMap.set(u.id, {
         name: u.full_name || u.username || u.tiktok_username || u.instagram_username || u.id,
         tiktok_username: u.tiktok_username,
-        instagram_username: u.instagram_username,
-        profile_picture_url: u.profile_picture_url
+        instagram_username: u.instagram_username
       })
     }
 
@@ -83,53 +81,20 @@ export async function GET(req: Request) {
 
     // === TIKTOK VIDEOS ===
     if (platform === 'all' || platform === 'tiktok') {
-      // Get TikTok usernames ONLY from employees in THIS campaign who are not hidden
-      const tiktokUsernames: string[] = []
-      const ttUsernameToEmployee = new Map<string, { id: string; name: string }>() // Map username -> employee info
-      
-      // From users table (main tiktok_username)
-      for (const u of users || []) {
-        if (u.tiktok_username) {
-          const username = u.tiktok_username.toLowerCase().replace(/^@+/, '')
-          tiktokUsernames.push(username)
-          ttUsernameToEmployee.set(username, { 
-            id: u.id, 
-            name: u.full_name || u.username || u.tiktok_username || u.id 
-          })
-        }
-      }
-      
-      // From employee_participants - MUST be for THIS campaign AND employee must be visible
-      const { data: ttParticipants } = await supabase
-        .from('employee_participants')
-        .select('employee_id, tiktok_username')
-        .eq('campaign_id', campaignId)
-        .in('employee_id', employeeIds)
-      
-      for (const p of ttParticipants || []) {
-        // Only include if employee is visible (exists in userMap)
-        const employeeInfo = userMap.get(p.employee_id)
-        if (employeeInfo && p.tiktok_username) {
-          const username = p.tiktok_username.toLowerCase().replace(/^@+/, '')
-          tiktokUsernames.push(username)
-          // Map this username to the employee
-          if (!ttUsernameToEmployee.has(username)) {
-            ttUsernameToEmployee.set(username, { 
-              id: p.employee_id, 
-              name: employeeInfo.name 
-            })
-          }
-        }
-      }
-      
-      const uniqueTikTokUsernames = Array.from(new Set(tiktokUsernames))
+      // Get TikTok usernames for employees
+      const tiktokUsernames = Array.from(new Set(
+        (users || [])
+          .map((u: any) => u.tiktok_username)
+          .filter(Boolean)
+          .map((u: string) => u.toLowerCase().replace(/^@+/, ''))
+      ))
 
-      if (uniqueTikTokUsernames.length > 0) {
+      if (tiktokUsernames.length > 0) {
         // Query tiktok_posts_daily for videos in window
         const { data: tiktokPosts } = await supabase
           .from('tiktok_posts_daily')
           .select('video_id, username, post_date, title, play_count, digg_count, comment_count, share_count, save_count')
-          .in('username', uniqueTikTokUsernames)
+          .in('username', tiktokUsernames)
           .gte('post_date', startISO)
           .lte('post_date', endISO)
           .order('play_count', { ascending: false })
@@ -173,38 +138,15 @@ export async function GET(req: Request) {
             ? Number(last.save_count || 0)
             : Math.max(0, Number(last.save_count || 0) - Number(first.save_count || 0))
 
-          // Find owner user - Try THREE ways
-          // 1. Try from ttUsernameToEmployee map (most reliable for campaign participants)
-          // 2. Try from userMap via tiktok_username (for main account)
-          // 3. Skip if not found (not a visible employee in this campaign)
-          let ownerName = null
+          // Find owner user
+          let ownerName = last.username
           let ownerId = null
-          let ownerProfilePic = null
-          
-          // First, try direct mapping from employee_participants
-          const directMapping = ttUsernameToEmployee.get(last.username.toLowerCase())
-          if (directMapping) {
-            ownerName = directMapping.name
-            ownerId = directMapping.id
-            const ownerInfo = userMap.get(directMapping.id)
-            if (ownerInfo) {
-              ownerProfilePic = ownerInfo.profile_picture_url || null
+          for (const [uid, info] of userMap.entries()) {
+            if (info.tiktok_username?.toLowerCase().replace(/^@+/, '') === last.username.toLowerCase()) {
+              ownerName = info.name
+              ownerId = uid
+              break
             }
-          } else {
-            // Fallback: search in userMap by tiktok_username
-            for (const [uid, info] of userMap.entries()) {
-              if (info.tiktok_username?.toLowerCase().replace(/^@+/, '') === last.username.toLowerCase()) {
-                ownerName = info.name
-                ownerId = uid
-                ownerProfilePic = info.profile_picture_url || null
-                break
-              }
-            }
-          }
-          
-          // Skip if no valid owner found (not a visible employee in this campaign)
-          if (!ownerId) {
-            continue;
           }
 
           videos.push({
@@ -213,7 +155,6 @@ export async function GET(req: Request) {
             username: last.username,
             owner_name: ownerName,
             owner_id: ownerId,
-            owner_profile_picture_url: ownerProfilePic,
             post_date: last.post_date,
             link: `https://www.tiktok.com/@${last.username}/video/${videoId}`,
             metrics: {
@@ -232,42 +173,23 @@ export async function GET(req: Request) {
 
     // === INSTAGRAM VIDEOS ===
     if (platform === 'all' || platform === 'instagram') {
-      // Get Instagram usernames ONLY from employees in THIS campaign who are not hidden
-      const instagramUsernames: string[] = []
-      const igUsernameToEmployee = new Map<string, { id: string; name: string }>() // Map username -> employee info
-      
-      // From users table (main instagram_username)
-      for (const u of users || []) {
-        if (u.instagram_username) {
-          const username = u.instagram_username.toLowerCase().replace(/^@+/, '')
-          instagramUsernames.push(username)
-          igUsernameToEmployee.set(username, { 
-            id: u.id, 
-            name: u.full_name || u.username || u.instagram_username || u.id 
-          })
-        }
-      }
+      // Get Instagram usernames for employees
+      const instagramUsernames = Array.from(new Set(
+        (users || [])
+          .map((u: any) => u.instagram_username)
+          .filter(Boolean)
+          .map((u: string) => u.toLowerCase().replace(/^@+/, ''))
+      ))
 
-      // From employee_instagram_participants - MUST be for THIS campaign AND employee must be visible
+      // Also get from employee_instagram_participants
       const { data: igParticipants } = await supabase
         .from('employee_instagram_participants')
-        .select('employee_id, instagram_username')
-        .eq('campaign_id', campaignId)
+        .select('instagram_username')
         .in('employee_id', employeeIds)
       
       for (const p of igParticipants || []) {
-        // Only include if employee is visible (exists in userMap)
-        const employeeInfo = userMap.get(p.employee_id)
-        if (employeeInfo && p.instagram_username) {
-          const username = p.instagram_username.toLowerCase().replace(/^@+/, '')
-          instagramUsernames.push(username)
-          // Map this username to the employee
-          if (!igUsernameToEmployee.has(username)) {
-            igUsernameToEmployee.set(username, { 
-              id: p.employee_id, 
-              name: employeeInfo.name 
-            })
-          }
+        if (p.instagram_username) {
+          instagramUsernames.push(p.instagram_username.toLowerCase().replace(/^@+/, ''))
         }
       }
 
@@ -314,45 +236,23 @@ export async function GET(req: Request) {
             ? Number(last.comment_count || 0)
             : Math.max(0, Number(last.comment_count || 0) - Number(first.comment_count || 0))
 
-          // Find owner user - Try THREE ways
-          // 1. Try from igUsernameToEmployee map (most reliable for campaign participants)
-          // 2. Try from userMap via instagram_username (for main account)
-          // 3. Skip if not found (not a visible employee in this campaign)
-          let ownerName = null
+          // Find owner user
+          let ownerName = last.username
           let ownerId = null
-          let ownerProfilePic = null
-          
-          // First, try direct mapping from employee_instagram_participants
-          const directMapping = igUsernameToEmployee.get(last.username.toLowerCase())
-          if (directMapping) {
-            ownerName = directMapping.name
-            ownerId = directMapping.id
-            const ownerInfo = userMap.get(directMapping.id)
-            if (ownerInfo) {
-              ownerProfilePic = ownerInfo.profile_picture_url || null
-            }
-          } else {
-            // Fallback: search in userMap by instagram_username
-            for (const [uid, info] of userMap.entries()) {
-              if (info.instagram_username?.toLowerCase().replace(/^@+/, '') === last.username.toLowerCase()) {
-                ownerName = info.name
-                ownerId = uid
-                ownerProfilePic = info.profile_picture_url || null
-                break
-              }
+          for (const [uid, info] of userMap.entries()) {
+            if (info.instagram_username?.toLowerCase().replace(/^@+/, '') === last.username.toLowerCase()) {
+              ownerName = info.name
+              ownerId = uid
+              break
             }
           }
 
-          // Skip if no valid owner found (not a visible employee in this campaign)
-          if (!ownerId) {
-            continue;
-          }          videos.push({
+          videos.push({
             platform: 'instagram',
             video_id: postId,
             username: last.username,
             owner_name: ownerName,
             owner_id: ownerId,
-            owner_profile_picture_url: ownerProfilePic,
             post_date: last.post_date,
             link: `https://www.instagram.com/reel/${last.code || postId}/`,
             metrics: {

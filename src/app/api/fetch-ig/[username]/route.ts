@@ -403,8 +403,7 @@ export async function GET(req: Request, context: any) {
         username: norm, 
         email: `${norm}@example.com`, 
         role: 'umum', 
-        instagram_username: norm,
-        is_hidden: true
+        instagram_username: norm 
       }, { onConflict: 'id' });
       if (!upErr) ownerUserId = newId;
     }
