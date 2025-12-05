@@ -320,34 +320,90 @@ export async function GET(req: Request, context: any) {
     if (start && end) {
       const { data: rows, error: aggErr } = await supabase
         .from('tiktok_posts_daily')
-        .select('play_count, digg_count, comment_count, share_count, save_count, title')
+        .select('video_id, play_count, digg_count, comment_count, share_count, save_count, title, post_date')
         .in('username', normUsernames)
         .gte('post_date', start)
-        .lte('post_date', end);
+        .lte('post_date', end)
+        .order('video_id')
+        .order('post_date');
+      
+      // Group by video_id to calculate accrual
+      const videoMap = new Map<string, any[]>();
       for (const r of rows || []) {
-        // Apply hashtag filter
-        if (!hasRequiredHashtag((r as any).title, requiredHashtags)) continue;
+        const vid = String((r as any).video_id);
+        if (!videoMap.has(vid)) videoMap.set(vid, []);
+        videoMap.get(vid)!.push(r);
+      }
+      
+      // Calculate accrual per video
+      for (const [vid, snapshots] of videoMap.entries()) {
+        if (snapshots.length === 0) continue;
         
-        totalsTikTok.views += Number((r as any).play_count) || 0;
-        totalsTikTok.likes += Number((r as any).digg_count) || 0;
-        totalsTikTok.comments += Number((r as any).comment_count) || 0;
-        totalsTikTok.shares += Number((r as any).share_count) || 0;
-        totalsTikTok.saves += Number((r as any).save_count) || 0;
+        snapshots.sort((a: any, b: any) => new Date(a.post_date).getTime() - new Date(b.post_date).getTime());
+        const first = snapshots[0];
+        const last = snapshots[snapshots.length - 1];
+        
+        // Apply hashtag filter
+        if (!hasRequiredHashtag(last.title, requiredHashtags)) continue;
+        
+        // Calculate delta
+        totalsTikTok.views += snapshots.length === 1
+          ? Number(last.play_count || 0)
+          : Math.max(0, Number(last.play_count || 0) - Number(first.play_count || 0));
+        totalsTikTok.likes += snapshots.length === 1
+          ? Number(last.digg_count || 0)
+          : Math.max(0, Number(last.digg_count || 0) - Number(first.digg_count || 0));
+        totalsTikTok.comments += snapshots.length === 1
+          ? Number(last.comment_count || 0)
+          : Math.max(0, Number(last.comment_count || 0) - Number(first.comment_count || 0));
+        totalsTikTok.shares += snapshots.length === 1
+          ? Number(last.share_count || 0)
+          : Math.max(0, Number(last.share_count || 0) - Number(first.share_count || 0));
+        totalsTikTok.saves += snapshots.length === 1
+          ? Number(last.save_count || 0)
+          : Math.max(0, Number(last.save_count || 0) - Number(first.save_count || 0));
         totalsTikTok.posts += 1;
       }
       const { data: igRows } = await supabase
         .from('instagram_posts_daily')
-        .select('play_count, like_count, comment_count, caption')
+        .select('id, play_count, like_count, comment_count, caption, post_date')
         .in('username', normIG)
         .gte('post_date', start)
-        .lte('post_date', end);
+        .lte('post_date', end)
+        .order('id')
+        .order('post_date');
+      
+      // Group by post id to calculate accrual
+      const postMap = new Map<string, any[]>();
       for (const r of igRows || []) {
-        // Apply hashtag filter
-        if (!hasRequiredHashtag((r as any).caption, requiredHashtags)) continue;
+        const postId = String((r as any).id);
+        if (!postMap.has(postId)) postMap.set(postId, []);
+        postMap.get(postId)!.push(r);
+      }
+      
+      // Calculate accrual per post
+      for (const [postId, snapshots] of postMap.entries()) {
+        if (snapshots.length === 0) continue;
         
-        totalsInstagram.views += Number((r as any).play_count)||0;
-        totalsInstagram.likes += Number((r as any).like_count)||0;
-        totalsInstagram.comments += Number((r as any).comment_count)||0;
+        snapshots.sort((a: any, b: any) => new Date(a.post_date).getTime() - new Date(b.post_date).getTime());
+        const first = snapshots[0];
+        const last = snapshots[snapshots.length - 1];
+        
+        // Apply hashtag filter
+        if (!hasRequiredHashtag(last.caption, requiredHashtags)) continue;
+        
+        // Calculate delta
+        totalsInstagram.views += snapshots.length === 1
+          ? Number(last.play_count || 0)
+          : Math.max(0, Number(last.play_count || 0) - Number(first.play_count || 0));
+        totalsInstagram.likes += snapshots.length === 1
+          ? Number(last.like_count || 0)
+          : Math.max(0, Number(last.like_count || 0) - Number(first.like_count || 0));
+        totalsInstagram.comments += snapshots.length === 1
+          ? Number(last.comment_count || 0)
+          : Math.max(0, Number(last.comment_count || 0) - Number(first.comment_count || 0));
+        totalsInstagram.posts += 1;
+      }
         totalsInstagram.posts += 1;
       }
     }

@@ -320,37 +320,69 @@ export default function AdminPage() {
     }
 
     try {
-      const res = await fetch('/api/admin/ig/refresh-all', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          batch_size: 1,      // SEQUENTIAL: 1 account at a time to avoid rate limits
-          delay_ms: 8000,     // 8 seconds delay between each request
-          only_with_user_id: true,
-          limit: 10,          // Process only 10 accounts per click (reduced from 30)
-          include_details: true
-        })
-      });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j?.error || 'Gagal refresh Instagram');
-
-      // Update session data
+      let offset = continueSession ? igBatchSession.processed.size : 0;
+      let hasMore = true;
       const newProcessed = new Set(igBatchSession.processed);
-      j.results?.forEach((r: any) => newProcessed.add(r.username));
+      let totalSuccess = igBatchSession.totalSuccess;
+      let totalFailed = igBatchSession.totalFailed;
+      const allResults: any[] = [...igBatchSession.allResults];
       
-      const newSession = {
-        processed: newProcessed,
-        totalSuccess: igBatchSession.totalSuccess + (j.success || 0),
-        totalFailed: igBatchSession.totalFailed + (j.failed || 0),
-        allResults: [...igBatchSession.allResults, j]
-      };
-      setIgBatchSession(newSession);
-      setIgResults(j);
-      setIgProgress({current: newProcessed.size, total: j.total_usernames || 0, success: newSession.totalSuccess, failed: newSession.totalFailed});
+      // Auto-loop dengan pagination sampai selesai atau max 50 usernames per session
+      const maxPerSession = 50;
+      let processedThisSession = 0;
+      
+      while (hasMore && processedThisSession < maxPerSession) {
+        const res = await fetch('/api/admin/ig/refresh-all', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            batch_size: 1,
+            delay_ms: 8000,     // 8 seconds delay between requests
+            only_with_user_id: true,
+            offset,             // Use pagination offset
+            include_details: true
+          })
+        });
+        const j = await res.json();
+        if (!res.ok) throw new Error(j?.error || 'Gagal refresh Instagram');
 
-      // Check if there are more accounts to process
-      if (j.processed < j.usernames_with_ids && newProcessed.size < j.total_usernames) {
+        // Update tracking
+        j.results?.forEach((r: any) => newProcessed.add(r.username));
+        totalSuccess += (j.success || 0);
+        totalFailed += (j.failed || 0);
+        allResults.push(j);
+        processedThisSession += j.processed || 0;
+        
+        // Update UI
+        setIgProgress({
+          current: newProcessed.size, 
+          total: j.total_usernames || 0, 
+          success: totalSuccess, 
+          failed: totalFailed
+        });
+        
+        // Check if more data exists
+        hasMore = j.has_more === true;
+        if (hasMore) {
+          offset = j.next_offset || (offset + (j.processed || 0));
+        }
+      }
+      
+      // Save final session state
+      const finalSession = {
+        processed: newProcessed,
+        totalSuccess,
+        totalFailed,
+        allResults
+      };
+      setIgBatchSession(finalSession);
+      setIgResults(allResults[allResults.length - 1]);
+
+      // Show dialog if more remain
+      if (hasMore) {
         setShowIgContinueDialog(true);
+      } else {
+        alert(`✅ Semua ${newProcessed.size} akun Instagram berhasil di-refresh!`);
       }
     } catch (e: any) {
       alert('Error: ' + (e?.message || 'Gagal refresh Instagram'));
@@ -411,36 +443,67 @@ export default function AdminPage() {
     }
 
     try {
-      const res = await fetch('/api/admin/tiktok/refresh-all', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          campaign_id: activeCampaignId,
-          batch_size: 1,      // SEQUENTIAL: 1 account at a time to avoid rate limits
-          delay_ms: 8000,     // 8 seconds delay between each request
-          limit: 10,          // Process only 10 accounts per click
-          include_details: true
-        })
-      });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j?.error || 'Gagal refresh TikTok');
-
-      // Update session data
+      let offset = continueSession ? tikTokBatchSession.processed.size : 0;
+      let hasMore = true;
       const newProcessed = new Set(tikTokBatchSession.processed);
-      j.results?.forEach((r: any) => newProcessed.add(r.username));
+      let totalSuccess = tikTokBatchSession.totalSuccess;
+      let totalFailed = tikTokBatchSession.totalFailed;
+      const allResults: any[] = [...tikTokBatchSession.allResults];
       
-      const newSession = {
-        processed: newProcessed,
-        totalSuccess: tikTokBatchSession.totalSuccess + (j.success || 0),
-        totalFailed: tikTokBatchSession.totalFailed + (j.failed || 0),
-        allResults: [...tikTokBatchSession.allResults, j]
-      };
-      setTikTokBatchSession(newSession);
-      setTikTokResults(j);
-      setTikTokProgress({current: newProcessed.size, total: j.total_usernames || 0, success: newSession.totalSuccess, failed: newSession.totalFailed});
+      // Auto-loop dengan pagination sampai selesai atau max 30 usernames per session
+      // TikTok lebih lambat (60s timeout per username) jadi limit lebih kecil
+      const maxPerSession = 30;
+      let processedThisSession = 0;
+      
+      while (hasMore && processedThisSession < maxPerSession) {
+        const res = await fetch('/api/admin/tiktok/refresh-all', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            campaign_id: activeCampaignId,
+            batch_size: 1,
+            delay_ms: 10000,    // 10 seconds delay for TikTok
+            offset,             // Use pagination offset
+            include_details: true
+          })
+        });
+        const j = await res.json();
+        if (!res.ok) throw new Error(j?.error || 'Gagal refresh TikTok');
 
-      // Show continuation dialog if more accounts remain
-      if (j.processed < j.total_usernames && newProcessed.size < j.total_usernames) {
+        // Update tracking
+        j.results?.forEach((r: any) => newProcessed.add(r.username));
+        totalSuccess += (j.success || 0);
+        totalFailed += (j.failed || 0);
+        allResults.push(j);
+        processedThisSession += j.processed || 0;
+        
+        // Update UI
+        setTikTokProgress({
+          current: newProcessed.size, 
+          total: j.total_usernames || 0, 
+          success: totalSuccess, 
+          failed: totalFailed
+        });
+        
+        // Check if more data exists
+        hasMore = j.has_more === true;
+        if (hasMore) {
+          offset = j.next_offset || (offset + (j.processed || 0));
+        }
+      }
+      
+      // Save final session state
+      const finalSession = {
+        processed: newProcessed,
+        totalSuccess,
+        totalFailed,
+        allResults
+      };
+      setTikTokBatchSession(finalSession);
+      setTikTokResults(allResults[allResults.length - 1]);
+
+      // Show dialog if more remain
+      if (hasMore) {
         setShowTikTokContinueDialog(true);
       } else {
         alert(`✅ Semua ${newProcessed.size} akun TikTok berhasil di-refresh!`);

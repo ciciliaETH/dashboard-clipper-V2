@@ -239,47 +239,113 @@ export async function GET(req: Request, context: any) {
       if (tikNeed.size > 0) {
         const { data: rows } = await supabase
           .from('tiktok_posts_daily')
-          .select('username, play_count, digg_count, comment_count, share_count, save_count, title')
+          .select('video_id, username, play_count, digg_count, comment_count, share_count, save_count, title, post_date')
           .gte('post_date', start)
           .lte('post_date', end)
-          .in('username', Array.from(tikNeed));
-        const map: Record<string, { views:number, likes:number, comments:number, shares:number, saves:number, posts:number }> = {};
+          .in('username', Array.from(tikNeed))
+          .order('video_id')
+          .order('post_date');
+        
+        // Group by video_id to calculate accrual
+        const videoMap = new Map<string, any[]>();
         for (const r of rows || []) {
-          // Apply hashtag filter
-          if (!hasRequiredHashtag((r as any).title, requiredHashtags)) continue;
+          const vid = String((r as any).video_id);
+          if (!videoMap.has(vid)) videoMap.set(vid, []);
+          videoMap.get(vid)!.push(r);
+        }
+        
+        const map: Record<string, { views:number, likes:number, comments:number, shares:number, saves:number, posts:number }> = {};
+        
+        // Calculate accrual per video (delta from first to last snapshot)
+        for (const [vid, snapshots] of videoMap.entries()) {
+          if (snapshots.length === 0) continue;
           
-          const u = String((r as any).username||''); if (!u) continue;
+          snapshots.sort((a: any, b: any) => new Date(a.post_date).getTime() - new Date(b.post_date).getTime());
+          const first = snapshots[0];
+          const last = snapshots[snapshots.length - 1];
+          
+          // Apply hashtag filter on last snapshot
+          if (!hasRequiredHashtag(last.title, requiredHashtags)) continue;
+          
+          const u = String(last.username||'').toLowerCase(); 
+          if (!u) continue;
+          
           const m = map[u] || { views:0, likes:0, comments:0, shares:0, saves:0, posts:0 };
-          m.views += Number((r as any).play_count)||0;
-          m.likes += Number((r as any).digg_count)||0;
-          m.comments += Number((r as any).comment_count)||0;
-          m.shares += Number((r as any).share_count)||0;
-          m.saves += Number((r as any).save_count)||0;
-          m.posts += 1;
+          
+          // Calculate delta (accrual)
+          m.views += snapshots.length === 1
+            ? Number(last.play_count || 0)
+            : Math.max(0, Number(last.play_count || 0) - Number(first.play_count || 0));
+          m.likes += snapshots.length === 1
+            ? Number(last.digg_count || 0)
+            : Math.max(0, Number(last.digg_count || 0) - Number(first.digg_count || 0));
+          m.comments += snapshots.length === 1
+            ? Number(last.comment_count || 0)
+            : Math.max(0, Number(last.comment_count || 0) - Number(first.comment_count || 0));
+          m.shares += snapshots.length === 1
+            ? Number(last.share_count || 0)
+            : Math.max(0, Number(last.share_count || 0) - Number(first.share_count || 0));
+          m.saves += snapshots.length === 1
+            ? Number(last.save_count || 0)
+            : Math.max(0, Number(last.save_count || 0) - Number(first.save_count || 0));
+          m.posts += 1; // Count unique videos
+          
           map[u] = m;
         }
+        
         sumsByUsername = map;
       }
       if (igNeed.size > 0) {
         const { data: rowsIG } = await supabase
           .from('instagram_posts_daily')
-          .select('username, play_count, like_count, comment_count, caption')
+          .select('id, username, play_count, like_count, comment_count, caption, post_date')
           .gte('post_date', start)
           .lte('post_date', end)
-          .in('username', Array.from(igNeed));
-        const mapIG: Record<string, { views:number, likes:number, comments:number, posts:number }> = {};
+          .in('username', Array.from(igNeed))
+          .order('id')
+          .order('post_date');
+        
+        // Group by post id to calculate accrual
+        const postMap = new Map<string, any[]>();
         for (const r of rowsIG || []) {
-          // Apply hashtag filter
-          if (!hasRequiredHashtag((r as any).caption, requiredHashtags)) continue;
+          const postId = String((r as any).id);
+          if (!postMap.has(postId)) postMap.set(postId, []);
+          postMap.get(postId)!.push(r);
+        }
+        
+        const mapIG: Record<string, { views:number, likes:number, comments:number, posts:number }> = {};
+        
+        // Calculate accrual per post (delta from first to last snapshot)
+        for (const [postId, snapshots] of postMap.entries()) {
+          if (snapshots.length === 0) continue;
           
-          const u = String((r as any).username||''); if (!u) continue;
+          snapshots.sort((a: any, b: any) => new Date(a.post_date).getTime() - new Date(b.post_date).getTime());
+          const first = snapshots[0];
+          const last = snapshots[snapshots.length - 1];
+          
+          // Apply hashtag filter on last snapshot
+          if (!hasRequiredHashtag(last.caption, requiredHashtags)) continue;
+          
+          const u = String(last.username||'').toLowerCase();
+          if (!u) continue;
+          
           const m = mapIG[u] || { views:0, likes:0, comments:0, posts:0 };
-          m.views += Number((r as any).play_count)||0;
-          m.likes += Number((r as any).like_count)||0;
-          m.comments += Number((r as any).comment_count)||0;
-          m.posts += 1;
+          
+          // Calculate delta (accrual)
+          m.views += snapshots.length === 1
+            ? Number(last.play_count || 0)
+            : Math.max(0, Number(last.play_count || 0) - Number(first.play_count || 0));
+          m.likes += snapshots.length === 1
+            ? Number(last.like_count || 0)
+            : Math.max(0, Number(last.like_count || 0) - Number(first.like_count || 0));
+          m.comments += snapshots.length === 1
+            ? Number(last.comment_count || 0)
+            : Math.max(0, Number(last.comment_count || 0) - Number(first.comment_count || 0));
+          m.posts += 1; // Count unique posts
+          
           mapIG[u] = m;
         }
+        
         sumsByUsernameIG = mapIG;
       }
       }
