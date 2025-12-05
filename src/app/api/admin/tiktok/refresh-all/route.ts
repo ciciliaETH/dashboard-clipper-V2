@@ -112,8 +112,9 @@ async function refreshHandler(req: Request) {
     // Pro plan: 1 req/sec, with 5s delay = safe with faster processing
     const delayMs = Math.max(0, Math.min(30000, Number(body?.delay_ms || 5000))); // Default 5 seconds
     const limit = Math.max(1, Math.min(10000, Number(body?.limit || 1000)));
-    const accountsPerBatch = 5; // Process 5 accounts per batch, then auto-continue
-    const autoContinue = body?.auto_continue !== false; // default TRUE - auto process all accounts
+    const accountsPerBatch = 10; // Process 10 accounts per batch (manual continue to avoid timeout)
+    const autoContinue = body?.auto_continue === true; // default FALSE - manual batch to prevent timeout
+    const offset = Math.max(0, Number(body?.offset || 0)); // Track which batch we're on
     
     // Get base URL for fetch-metrics endpoint
     const protocol = req.headers.get('x-forwarded-proto') || 'http';
@@ -178,10 +179,12 @@ async function refreshHandler(req: Request) {
   let totalFailed = 0;
   const maxRetries = 2; // Retry failed requests up to 2 times
   
-  // AUTO-CONTINUE: Process ALL accounts in batches
+  // Manual batch processing with offset tracking
   const totalBatches = Math.ceil(allUsernames.length / accountsPerBatch);
+  const startBatch = Math.floor(offset / accountsPerBatch);
+  const endBatch = autoContinue ? totalBatches : startBatch + 1; // Only process 1 batch unless auto-continue
   
-  for (let batchNum = 0; batchNum < totalBatches; batchNum++) {
+  for (let batchNum = startBatch; batchNum < endBatch; batchNum++) {
     const batchStart = batchNum * accountsPerBatch;
     const batchEnd = Math.min(batchStart + accountsPerBatch, allUsernames.length);
     const batchUsernames = allUsernames.slice(batchStart, batchEnd);
@@ -292,14 +295,9 @@ async function refreshHandler(req: Request) {
     
     console.log(`[TikTok Refresh] Batch ${batchNum + 1}/${totalBatches} completed: ${batchSuccess} success, ${batchFailed} failed, ${Math.round(batchDuration/1000)}s`);
     
-    // Small delay between batches (2 seconds)
-    if (batchNum < totalBatches - 1) {
+    // Small delay between batches (2 seconds) - only if auto-continue
+    if (autoContinue && batchNum < endBatch - 1) {
       await new Promise(resolve => setTimeout(resolve, 2000));
-    }
-    
-    // If NOT auto-continue, stop after first batch
-    if (!autoContinue) {
-      break;
     }
   }
 
@@ -324,27 +322,30 @@ async function refreshHandler(req: Request) {
     }
   }
 
-  const processedCount = allResults.length;
+  const processedCount = offset + allResults.length;
   const remainingCount = allUsernames.length - processedCount;
+  const nextOffset = remainingCount > 0 ? processedCount : 0;
 
   return NextResponse.json({
     total_usernames: allUsernames.length,
     total_batches: totalBatches,
+    current_batch: startBatch + 1,
     batches_processed: batchProgress.length,
-    processed: processedCount,
+    processed: allResults.length,
+    total_processed: processedCount,
     success: totalSuccess,
     failed: totalFailed,
     remaining: remainingCount,
+    offset: offset,
+    next_offset: nextOffset,
     total_posts: totalPosts,
     total_views: totalViews,
     total_likes: totalLikes,
     avg_duration_ms: avgDuration,
     auto_continue: autoContinue,
-    message: autoContinue 
-      ? `All ${processedCount} accounts processed in ${batchProgress.length} batches.`
-      : remainingCount > 0
-        ? `Processed ${processedCount} of ${allUsernames.length} accounts. Click refresh again to continue.`
-        : `All ${allUsernames.length} accounts processed.`,
+    message: remainingCount > 0
+      ? `Batch ${startBatch + 1}/${totalBatches}: Processed ${allResults.length} accounts (${processedCount}/${allUsernames.length} total). Click refresh to continue with next ${Math.min(accountsPerBatch, remainingCount)} accounts.`
+      : `All ${allUsernames.length} accounts processed successfully!`,
     batch_progress: batchProgress,
     accounts_per_batch: accountsPerBatch,
     results: body?.include_details ? allResults : undefined,

@@ -284,15 +284,16 @@ export default function AdminPage() {
   const [igProgress, setIgProgress] = useState<{current: number; total: number; success: number; failed: number} | null>(null);
   const [igResults, setIgResults] = useState<any>(null);
   const [showIgContinueDialog, setShowIgContinueDialog] = useState(false);
-  const [igBatchSession, setIgBatchSession] = useState<{processed: Set<string>; totalSuccess: number; totalFailed: number; allResults: any[]}>({processed: new Set(), totalSuccess: 0, totalFailed: 0, allResults: []});
+  const [igOffset, setIgOffset] = useState(0); // Track batch offset
 
   const runIGBatch = async (continueSession = false) => {
     setRefreshingIG(true);
     setShowIgContinueDialog(false);
     
     if (!continueSession) {
-      setIgBatchSession({processed: new Set(), totalSuccess: 0, totalFailed: 0, allResults: []});
+      setIgOffset(0);
       setIgResults(null);
+      setIgProgress(null);
     }
 
     try {
@@ -300,8 +301,7 @@ export default function AdminPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          batch_size: 1,      // SEQUENTIAL: 1 account at a time to avoid rate limits
-          delay_ms: 8000,     // 8 seconds delay between each request
+          offset: continueSession ? igOffset : 0,
           only_with_user_id: true,
           include_details: true
         })
@@ -319,19 +319,18 @@ export default function AdminPage() {
       
       if (!res.ok) throw new Error(j?.error || 'Gagal refresh Instagram');
 
-      // Update session data
-      const newProcessed = new Set(igBatchSession.processed);
-      j.results?.forEach((r: any) => newProcessed.add(r.username));
+      // Update offset for next batch
+      if (j.next_offset) {
+        setIgOffset(j.next_offset);
+      }
       
-      const newSession = {
-        processed: newProcessed,
-        totalSuccess: igBatchSession.totalSuccess + (j.success || 0),
-        totalFailed: igBatchSession.totalFailed + (j.failed || 0),
-        allResults: [...igBatchSession.allResults, j]
-      };
-      setIgBatchSession(newSession);
       setIgResults(j);
-      setIgProgress({current: newProcessed.size, total: j.total_usernames || 0, success: newSession.totalSuccess, failed: newSession.totalFailed});
+      setIgProgress({
+        current: j.total_processed || 0, 
+        total: j.usernames_with_ids || 0, 
+        success: j.success || 0, 
+        failed: j.failed || 0
+      });
 
       // Show message if provided
       if (j.message) {
@@ -342,7 +341,8 @@ export default function AdminPage() {
       if (j.remaining > 0) {
         setShowIgContinueDialog(true);
       } else {
-        alert(`✅ Semua ${j.total_usernames} akun Instagram berhasil di-refresh!`);
+        alert(`✅ Semua ${j.usernames_with_ids} akun Instagram berhasil di-refresh!`);
+        setIgOffset(0); // Reset for next full refresh
       }
     } catch (e: any) {
       alert('Error: ' + (e?.message || 'Gagal refresh Instagram'));
@@ -356,7 +356,7 @@ export default function AdminPage() {
   const [tikTokProgress, setTikTokProgress] = useState<{current: number; total: number; success: number; failed: number} | null>(null);
   const [tikTokResults, setTikTokResults] = useState<any>(null);
   const [showTikTokContinueDialog, setShowTikTokContinueDialog] = useState(false);
-  const [tikTokBatchSession, setTikTokBatchSession] = useState<{processed: Set<string>; totalSuccess: number; totalFailed: number; allResults: any[]}>({processed: new Set(), totalSuccess: 0, totalFailed: 0, allResults: []});
+  const [tikTokOffset, setTikTokOffset] = useState(0); // Track batch offset
 
   // Accrual backfill state
   const [runningAccrual, setRunningAccrual] = useState(false);
@@ -399,7 +399,9 @@ export default function AdminPage() {
     setShowTikTokContinueDialog(false);
     
     if (!continueSession) {
-      setTikTokBatchSession({processed: new Set(), totalSuccess: 0, totalFailed: 0, allResults: []});
+      setTikTokOffset(0);
+      setTikTokResults(null);
+      setTikTokProgress(null);
     }
 
     try {
@@ -409,9 +411,7 @@ export default function AdminPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          campaign_id: activeCampaignId,
-          batch_size: 1,      // SEQUENTIAL: 1 account at a time to avoid rate limits
-          delay_ms: 8000,     // 8 seconds delay between each request
+          offset: continueSession ? tikTokOffset : 0,
           include_details: true
         })
       });
@@ -433,19 +433,18 @@ export default function AdminPage() {
       
       if (!res.ok) throw new Error(j?.error || 'Gagal refresh TikTok');
 
-      // Update session data
-      const newProcessed = new Set(tikTokBatchSession.processed);
-      j.results?.forEach((r: any) => newProcessed.add(r.username));
+      // Update offset for next batch
+      if (j.next_offset) {
+        setTikTokOffset(j.next_offset);
+      }
       
-      const newSession = {
-        processed: newProcessed,
-        totalSuccess: tikTokBatchSession.totalSuccess + (j.success || 0),
-        totalFailed: tikTokBatchSession.totalFailed + (j.failed || 0),
-        allResults: [...tikTokBatchSession.allResults, j]
-      };
-      setTikTokBatchSession(newSession);
       setTikTokResults(j);
-      setTikTokProgress({current: newProcessed.size, total: j.total_usernames || 0, success: newSession.totalSuccess, failed: newSession.totalFailed});
+      setTikTokProgress({
+        current: j.total_processed || 0, 
+        total: j.total_usernames || 0, 
+        success: j.success || 0, 
+        failed: j.failed || 0
+      });
 
       // Show message if provided
       if (j.message) {
@@ -456,7 +455,8 @@ export default function AdminPage() {
       if (j.remaining > 0) {
         setShowTikTokContinueDialog(true);
       } else {
-        alert(`✅ Semua ${newProcessed.size} akun TikTok berhasil di-refresh!`);
+        alert(`✅ Semua ${j.total_usernames} akun TikTok berhasil di-refresh!`);
+        setTikTokOffset(0); // Reset for next full refresh
       }
     } catch (e: any) {
       console.error('[TikTok Refresh] Error caught:', e);
