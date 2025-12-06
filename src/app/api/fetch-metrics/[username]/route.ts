@@ -851,17 +851,35 @@ export async function GET(request: Request, context: any) {
     const toUpsert: any[] = [];
     const minDate = startBound ? new Date(startBound) : new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
     const maxDate = endBound ? new Date(endBound) : null;
+    
+    console.log(`[TikTok Parse] ${normalized}: Processing ${videos.length} videos, minDate=${minDate.toISOString()}, maxDate=${maxDate?.toISOString() || 'none'}`);
+    
     for (const v of videos) {
       // Parse timestamp - support both aggregator (createTime) and RapidAPI (create_time) formats
       const ts = v.create_time ?? v.createTime ?? v.create_time_utc ?? v.create_date ?? v.timestamp;
       const ms = typeof ts === 'number' ? (ts > 1e12 ? ts : ts * 1000) : Number(ts) > 0 ? (Number(ts) > 1e12 ? Number(ts) : Number(ts) * 1000) : Date.parse(ts);
       const d = new Date(ms);
-      if (isNaN(d.getTime())) continue;
-      if (d < minDate) continue;
-      if (maxDate && d > maxDate) continue;
+      
+      if (isNaN(d.getTime())) {
+        console.log(`[TikTok Parse] SKIP: Invalid date for video`, v.video_id || v.aweme_id);
+        continue;
+      }
+      if (d < minDate) {
+        console.log(`[TikTok Parse] SKIP: Video too old (${d.toISOString()})`, v.video_id || v.aweme_id);
+        continue;
+      }
+      if (maxDate && d > maxDate) {
+        console.log(`[TikTok Parse] SKIP: Video too new (${d.toISOString()})`, v.video_id || v.aweme_id);
+        continue;
+      }
       
       // Parse video ID - support multiple formats
       const vId = v.aweme_id || v.video_id || v.id || v.awemeId || deriveVideoId(v);
+      
+      if (!vId) {
+        console.log(`[TikTok Parse] SKIP: No video ID found`, v);
+        continue;
+      }
       
       // Parse stats - CRITICAL: Support both RapidAPI and Aggregator formats
       // RapidAPI: v.stats.playCount or v.statsV2.playCount
@@ -872,9 +890,14 @@ export async function GET(request: Request, context: any) {
       const vShares = readStat(v,'share') || Number(v.shareCount || v.share_count || v.shares || 0) || 0;
       const vSaves = readStat(v,'save') || Number(v.saveCount || v.save_count || v.collectCount || v.collect_count || v.favoriteCount || v.favorite_count || v.saves || 0) || 0;
       
+      console.log(`[TikTok Parse] ✅ Video ${vId}: views=${vViews}, likes=${vLikes}, comments=${vComments}, date=${d.toISOString().slice(0,10)}`);
+      
       totals.views += vViews; totals.likes += vLikes; totals.comments += vComments; totals.shares += vShares; totals.saves += vSaves; totals.posts_total += 1;
       if (vId) toUpsert.push({ video_id: String(vId), username: normalized, sec_uid: tiktok_sec_uid || null, post_date: d.toISOString().slice(0, 10), play_count: vViews, digg_count: vLikes, comment_count: vComments, share_count: vShares, save_count: vSaves });
     }
+    
+    console.log(`[TikTok Parse] ${normalized}: Parsed ${toUpsert.length}/${videos.length} videos. Total stats: views=${totals.views}, likes=${totals.likes}`);
+    
     if (toUpsert.length) {
       const chunkSize = 500;
       for (let i = 0; i < toUpsert.length; i += chunkSize) {
