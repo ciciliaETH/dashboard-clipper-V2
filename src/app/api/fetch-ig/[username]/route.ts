@@ -7,7 +7,9 @@ import { fetchAllProviders, fetchProfileData, fetchLinksData, IG_HOST, IG_SCRAPE
 import { resolveUserIdViaLink, resolveUserId } from './resolvers';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 300; // 5 minutes - multiple Instagram providers with retries
+export const maxDuration = 300; // 5 minutes - aggregator + RapidAPI fallback
+
+const AGG_BASE = process.env.AGGREGATOR_BASE; // http://202.10.44.90/api/v1
 
 function admin() {
   return createAdmin(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
@@ -37,9 +39,91 @@ export async function GET(req: Request, context: any) {
 
   const supa = admin();
   const upserts: any[] = [];
-  let source = 'reels:user_id';
+  let source = 'aggregator';
   
   try {
+    // ============================================
+    // STEP 1: Try AGGREGATOR FIRST (PRIMARY)
+    // ============================================
+    if (AGG_BASE) {
+      try {
+        const aggUrl = `${AGG_BASE}/instagram/reels?username=${encodeURIComponent(norm)}`;
+        console.log(`[fetch-ig] Trying AGGREGATOR: ${aggUrl}`);
+        
+        const aggController = new AbortController();
+        const aggTimeout = setTimeout(() => aggController.abort(), 30000); // 30s timeout
+        
+        const aggResp = await fetch(aggUrl, { 
+          signal: aggController.signal,
+          headers: { 'Content-Type': 'application/json' }
+        });
+        clearTimeout(aggTimeout);
+        
+        if (aggResp.ok) {
+          const aggData = await aggResp.json();
+          const aggReels = aggData?.data?.reels || [];
+          
+          if (aggReels.length > 0) {
+            console.log(`[fetch-ig] ✅ AGGREGATOR SUCCESS: ${aggReels.length} reels for @${norm}`);
+            
+            for (const reel of aggReels) {
+              const id = String(reel?.id || '');
+              const code = String(reel?.code || '');
+              if (!id) continue;
+              
+              const takenAt = Number(reel?.taken_at || 0);
+              if (!takenAt) continue;
+              
+              const post_date = new Date(takenAt * 1000).toISOString().slice(0, 10);
+              const caption = String(reel?.caption || '');
+              const play = Number(reel?.play_count || reel?.ig_play_count || 0);
+              const like = Number(reel?.like_count || 0);
+              const comment = Number(reel?.comment_count || 0);
+              
+              upserts.push({ 
+                id, 
+                code: code || null, 
+                caption: caption || null, 
+                username: norm, 
+                post_date, 
+                play_count: play, 
+                like_count: like, 
+                comment_count: comment 
+              });
+            }
+            
+            source = 'aggregator';
+            
+            // SUCCESS - skip RapidAPI
+            if (upserts.length > 0) {
+              await supa.from('instagram_posts_daily').upsert(upserts, { onConflict: 'id,post_date' });
+              return NextResponse.json({ 
+                success: true, 
+                source, 
+                username: norm, 
+                inserted: upserts.length, 
+                total_views: upserts.reduce((s, u) => s + u.play_count, 0) 
+              });
+            }
+          } else {
+            console.log(`[fetch-ig] ⚠️ Aggregator returned 0 reels, trying RapidAPI fallback...`);
+          }
+        } else {
+          console.log(`[fetch-ig] Aggregator HTTP ${aggResp.status}, trying RapidAPI fallback...`);
+        }
+      } catch (aggErr: any) {
+        if (aggErr.name === 'AbortError') {
+          console.log(`[fetch-ig] Aggregator timeout (30s), trying RapidAPI fallback...`);
+        } else {
+          console.warn(`[fetch-ig] Aggregator error:`, aggErr.message);
+        }
+      }
+    }
+
+    // ============================================
+    // STEP 2: FALLBACK to RapidAPI
+    // ============================================
+    console.log(`[fetch-ig] Trying RapidAPI fallback for @${norm}...`);
     let userId = await resolveUserIdViaLink(norm, supa);
     let edges: any[] = [];
 
@@ -107,7 +191,7 @@ export async function GET(req: Request, context: any) {
             
             upserts.push({ id, code: code || null, caption: caption || null, username: norm, post_date, play_count: play, like_count: like, comment_count: comment });
           }
-          source = 'scraper:multi-retry';
+          source = 'rapidapi:scraper:fallback';
         } else if (bestResult.source === 'best') {
           for (const it of bestResult.items) {
             const media = it;
@@ -131,10 +215,10 @@ export async function GET(req: Request, context: any) {
             
             upserts.push({ id: pid, code: code || null, caption: caption || null, username: norm, post_date, play_count: play, like_count: like, comment_count: comment });
           }
-          source = 'best:multi-retry';
+          source = 'rapidapi:best:fallback';
         } else {
           edges = bestResult.items;
-          source = `${bestResult.source}:multi-retry`;
+          source = `rapidapi:${bestResult.source}:fallback`;
         }
       }
     }
