@@ -852,18 +852,26 @@ export async function GET(request: Request, context: any) {
     const minDate = startBound ? new Date(startBound) : new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
     const maxDate = endBound ? new Date(endBound) : null;
     for (const v of videos) {
-      const ts = v.create_time ?? v.createTime ?? v.create_time_utc ?? v.create_date;
+      // Parse timestamp - support both aggregator (createTime) and RapidAPI (create_time) formats
+      const ts = v.create_time ?? v.createTime ?? v.create_time_utc ?? v.create_date ?? v.timestamp;
       const ms = typeof ts === 'number' ? (ts > 1e12 ? ts : ts * 1000) : Number(ts) > 0 ? (Number(ts) > 1e12 ? Number(ts) : Number(ts) * 1000) : Date.parse(ts);
       const d = new Date(ms);
       if (isNaN(d.getTime())) continue;
       if (d < minDate) continue;
       if (maxDate && d > maxDate) continue;
-      const vId = v.aweme_id || v.video_id || v.id || deriveVideoId(v);
-      const vViews = readStat(v,'play');
-      const vLikes = readStat(v,'digg');
-      const vComments = readStat(v,'comment');
-      const vShares = readStat(v,'share');
-      const vSaves = readStat(v,'save');
+      
+      // Parse video ID - support multiple formats
+      const vId = v.aweme_id || v.video_id || v.id || v.awemeId || deriveVideoId(v);
+      
+      // Parse stats - CRITICAL: Support both RapidAPI and Aggregator formats
+      // RapidAPI: v.stats.playCount or v.statsV2.playCount
+      // Aggregator: v.playCount or v.play_count directly on object
+      const vViews = readStat(v,'play') || Number(v.playCount || v.play_count || v.views || 0) || 0;
+      const vLikes = readStat(v,'digg') || Number(v.likeCount || v.like_count || v.diggCount || v.digg_count || v.likes || 0) || 0;
+      const vComments = readStat(v,'comment') || Number(v.commentCount || v.comment_count || v.comments || 0) || 0;
+      const vShares = readStat(v,'share') || Number(v.shareCount || v.share_count || v.shares || 0) || 0;
+      const vSaves = readStat(v,'save') || Number(v.saveCount || v.save_count || v.collectCount || v.collect_count || v.favoriteCount || v.favorite_count || v.saves || 0) || 0;
+      
       totals.views += vViews; totals.likes += vLikes; totals.comments += vComments; totals.shares += vShares; totals.saves += vSaves; totals.posts_total += 1;
       if (vId) toUpsert.push({ video_id: String(vId), username: normalized, sec_uid: tiktok_sec_uid || null, post_date: d.toISOString().slice(0, 10), play_count: vViews, digg_count: vLikes, comment_count: vComments, share_count: vShares, save_count: vSaves });
     }
