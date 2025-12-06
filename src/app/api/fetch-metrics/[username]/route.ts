@@ -3,6 +3,9 @@ import { createClient } from '@/lib/supabase/server';
 import { createClient as createAdmin } from '@supabase/supabase-js';
 import { randomUUID } from 'crypto';
 import { rapidApiRequest } from '@/lib/rapidapi';
+
+export const dynamic = 'force-dynamic';
+export const maxDuration = 300; // 5 minutes - aggregator + RapidAPI fallback
 // DIRECT RAPIDAPI ONLY - NO AGGREGATOR OR EDGE FUNCTIONS
 const TIKTOK_RAPID_HOST = process.env.RAPIDAPI_TIKTOK_HOST || 'tiktok-scraper7.p.rapidapi.com';
 const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY!;
