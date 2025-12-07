@@ -36,7 +36,7 @@ async function fetchTikTokData(
   startDate: string,
   endDate: string,
   baseUrl: string, 
-  timeout = 240000
+  timeout = 60000
 ): Promise<FetchResult> {
   const start = Date.now();
   try {
@@ -110,9 +110,9 @@ async function refreshHandler(req: Request) {
     
     // GUARANTEED ZERO RATE LIMITS: 5 seconds delay (5x slower than limit)
     // Pro plan: 1 req/sec, with 5s delay = safe with faster processing
-    const delayMs = Math.max(0, Math.min(30000, Number(body?.delay_ms || 5000))); // Default 5 seconds
+    const delayMs = Math.max(0, Math.min(30000, Number(body?.delay_ms || 2000))); // Default 2 seconds (FASTER)
     const limit = Math.max(1, Math.min(10000, Number(body?.limit || 1000)));
-    const accountsPerBatch = 10; // Process 10 accounts per batch (manual continue to avoid timeout)
+    const accountsPerBatch = 3; // Process 3 accounts per batch (AVOID 300s TIMEOUT!)
     const autoContinue = body?.auto_continue === true; // default FALSE - manual batch to prevent timeout
     const offset = Math.max(0, Number(body?.offset || 0)); // Track which batch we're on
     
@@ -177,7 +177,7 @@ async function refreshHandler(req: Request) {
   
   let totalSuccess = 0;
   let totalFailed = 0;
-  const maxRetries = 999; // UNLIMITED: Retry as many times as needed - data MUST exist
+  const maxRetries = 3; // Retry 3x per batch (not unlimited - avoid timeout loops)
   const failedAccountsQueue: string[] = []; // Track failed accounts to retry in next batch
   
   // Manual batch processing with offset tracking

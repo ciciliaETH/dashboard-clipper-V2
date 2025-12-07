@@ -30,7 +30,7 @@ interface FetchResult {
   duration_ms?: number;
 }
 
-async function fetchInstagramData(username: string, baseUrl: string, timeout = 240000): Promise<FetchResult> {
+async function fetchInstagramData(username: string, baseUrl: string, timeout = 60000): Promise<FetchResult> {
   const start = Date.now();
   try {
     const url = `${baseUrl}/api/fetch-ig/${encodeURIComponent(username)}?create=1&allow_username=0`;
@@ -102,10 +102,10 @@ async function refreshHandler(req: Request) {
   const batchSize = Math.max(1, Math.min(100, Number(body?.batch_size || 1)));
   // GUARANTEED ZERO RATE LIMITS: 5 seconds delay (5x slower than limit)
   // Pro plan: 1 req/sec, with 5s delay = safe with faster processing
-  const delayMs = Math.max(0, Math.min(30000, Number(body?.delay_ms || 5000))); // Default 5 seconds
+  const delayMs = Math.max(0, Math.min(30000, Number(body?.delay_ms || 2000))); // Default 2 seconds (FASTER)
   const limit = Math.max(1, Math.min(10000, Number(body?.limit || 1000)));
   const onlyWithUserId = body?.only_with_user_id === true; // default FALSE - fetch all usernames
-  const accountsPerBatch = 10; // Process 10 accounts per batch (manual continue to avoid timeout)
+  const accountsPerBatch = 3; // Process 3 accounts per batch (AVOID 300s TIMEOUT!)
   const autoContinue = body?.auto_continue === true; // default FALSE - manual batch to prevent timeout
   const offset = Math.max(0, Number(body?.offset || 0)); // Track which batch we're on
   
