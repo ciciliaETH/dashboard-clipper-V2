@@ -290,6 +290,7 @@ export default function AdminPage() {
     totalFailed: 0,
     processed: new Set<string>()
   });
+  const [autoIGMode, setAutoIGMode] = useState(false); // AUTO-CONTINUE MODE
 
   const runIGBatch = async (continueSession = false) => {
     setRefreshingIG(true);
@@ -350,14 +351,21 @@ export default function AdminPage() {
         console.log('[Instagram Refresh]', j.message);
       }
 
-      // Check if there are more accounts to process
+      // AUTO-CONTINUE MODE: Automatically continue to next batch
       if (j.remaining > 0) {
-        setShowIgContinueDialog(true);
+        if (autoIGMode) {
+          console.log(`[AUTO MODE IG] ${j.remaining} accounts remaining, continuing in 2 seconds...`);
+          setTimeout(() => runIGBatch(true), 2000); // Auto-continue after 2s
+        } else {
+          setShowIgContinueDialog(true);
+        }
       } else {
-        alert(`✅ Semua ${j.usernames_with_ids} akun Instagram berhasil di-refresh!`);
+        setAutoIGMode(false); // Reset auto mode
+        alert(`✅ Semua ${j.usernames_with_ids} akun Instagram berhasil di-refresh!\n\nSuccess: ${igBatchSession.totalSuccess + (j.success || 0)}\nFailed: ${igBatchSession.totalFailed + (j.failed || 0)}`);
         setIgOffset(0); // Reset for next full refresh
       }
     } catch (e: any) {
+      setAutoIGMode(false); // Stop auto mode on error
       alert('Error: ' + (e?.message || 'Gagal refresh Instagram'));
     } finally {
       setRefreshingIG(false);
@@ -375,6 +383,7 @@ export default function AdminPage() {
     totalFailed: 0,
     processed: new Set<string>()
   });
+  const [autoTikTokMode, setAutoTikTokMode] = useState(false); // AUTO-CONTINUE MODE
 
   // Accrual backfill state
   const [runningAccrual, setRunningAccrual] = useState(false);
@@ -477,15 +486,22 @@ export default function AdminPage() {
         console.log('[TikTok Refresh]', j.message);
       }
 
-      // Show continuation dialog if more accounts remain
+      // AUTO-CONTINUE MODE: Automatically continue to next batch
       if (j.remaining > 0) {
-        setShowTikTokContinueDialog(true);
+        if (autoTikTokMode) {
+          console.log(`[AUTO MODE] ${j.remaining} accounts remaining, continuing in 2 seconds...`);
+          setTimeout(() => runTikTokBatch(true), 2000); // Auto-continue after 2s
+        } else {
+          setShowTikTokContinueDialog(true);
+        }
       } else {
-        alert(`✅ Semua ${j.total_usernames} akun TikTok berhasil di-refresh!`);
+        setAutoTikTokMode(false); // Reset auto mode
+        alert(`✅ Semua ${j.total_usernames} akun TikTok berhasil di-refresh!\n\nSuccess: ${tikTokBatchSession.totalSuccess + (j.success || 0)}\nFailed: ${tikTokBatchSession.totalFailed + (j.failed || 0)}`);
         setTikTokOffset(0); // Reset for next full refresh
       }
     } catch (e: any) {
       console.error('[TikTok Refresh] Error caught:', e);
+      setAutoTikTokMode(false); // Stop auto mode on error
       alert('Error: ' + (e?.message || 'Gagal refresh TikTok'));
     } finally {
       setRefreshingTikTok(false);
@@ -499,14 +515,29 @@ export default function AdminPage() {
         <div className="flex items-center gap-3">
           <button 
             onClick={runAccrualBackfill}
-            disabled={runningAccrual}
-            className="inline-flex items-center gap-2 rounded-xl px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-lg hover:shadow-xl transition-all disabled:opacity-50"
-            title="Backfill social_metrics_history untuk leaderboard accrual mode"
+          <button 
+            onClick={() => {
+              setAutoTikTokMode(false); // Manual mode
+              runTikTokBatch(false);
+            }} 
+            disabled={refreshingTikTok}
+            className="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 bg-gradient-to-r from-gray-800 to-gray-900 text-white shadow-lg hover:shadow-xl transition-all border border-white/10 disabled:opacity-50"
           >
-            <span className="text-lg">📊</span>
-            <span className="font-medium text-sm">{runningAccrual ? 'Backfilling...' : 'Accrual Backfill'}</span>
+            <span className="text-lg">🎵</span>
+            <span className="font-medium">{refreshingTikTok ? 'Refreshing TikTok...' : 'Refresh Data TikTok'}</span>
           </button>
           <button 
+            onClick={() => {
+              setAutoTikTokMode(true); // AUTO MODE - NO STOP!
+              runTikTokBatch(false);
+            }} 
+            disabled={refreshingTikTok}
+            className="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg hover:shadow-xl transition-all disabled:opacity-50 animate-pulse"
+            title="AUTO MODE: Refresh semua akun tanpa henti sampai selesai!"
+          >
+            <span className="text-lg">🚀</span>
+            <span className="font-medium">{autoTikTokMode ? '⚡ AUTO RUNNING...' : '⚡ AUTO ALL'}</span>
+          </button>
             onClick={() => runTikTokBatch(false)} 
             disabled={refreshingTikTok}
             className="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 bg-gradient-to-r from-gray-800 to-gray-900 text-white shadow-lg hover:shadow-xl transition-all border border-white/10 disabled:opacity-50"
@@ -515,12 +546,27 @@ export default function AdminPage() {
             <span className="font-medium">{refreshingTikTok ? 'Refreshing TikTok...' : 'Refresh Data TikTok'}</span>
           </button>
           <button 
-            onClick={() => runIGBatch(false)} 
+            onClick={() => {
+              setAutoIGMode(false); // Manual mode
+              runIGBatch(false);
+            }} 
             disabled={refreshingIG}
             className="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 bg-gradient-to-r from-pink-600 to-purple-600 text-white shadow-lg hover:shadow-xl transition-all disabled:opacity-50"
           >
             <span className="text-lg">📸</span>
             <span className="font-medium">{refreshingIG ? 'Refreshing Instagram...' : 'Refresh Data Instagram'}</span>
+          </button>
+          <button 
+            onClick={() => {
+              setAutoIGMode(true); // AUTO MODE - NO STOP!
+              runIGBatch(false);
+            }} 
+            disabled={refreshingIG}
+            className="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 bg-gradient-to-r from-orange-600 to-red-600 text-white shadow-lg hover:shadow-xl transition-all disabled:opacity-50 animate-pulse"
+            title="AUTO MODE: Refresh semua akun Instagram tanpa henti sampai selesai!"
+          >
+            <span className="text-lg">🚀</span>
+            <span className="font-medium">{autoIGMode ? '⚡ AUTO RUNNING...' : '⚡ AUTO ALL IG'}</span>
           </button>
           <button 
             onClick={runResolveIG} 
