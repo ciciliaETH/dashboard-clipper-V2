@@ -173,7 +173,8 @@ async function refreshHandler(req: Request) {
   
   let totalSuccess = 0;
   let totalFailed = 0;
-  const maxRetries = 10; // EMERGENCY: 10 retries for ABSOLUTE ZERO data loss
+  const maxRetries = 999; // UNLIMITED: Retry as many times as needed - data MUST exist
+  const failedAccountsQueue: string[] = []; // Track failed accounts to retry in next batch
   
   // Manual batch processing with offset tracking
   const totalBatches = Math.ceil(usernamesToFetch.length / accountsPerBatch);
@@ -183,14 +184,22 @@ async function refreshHandler(req: Request) {
   for (let batchNum = startBatch; batchNum < endBatch; batchNum++) {
     const batchStart = batchNum * accountsPerBatch;
     const batchEnd = Math.min(batchStart + accountsPerBatch, usernamesToFetch.length);
-    const batchUsernames = usernamesToFetch.slice(batchStart, batchEnd);
+    let batchUsernames = usernamesToFetch.slice(batchStart, batchEnd);
+    
+    // CRITICAL: Prepend failed accounts from previous batch to RETRY them first
+    if (failedAccountsQueue.length > 0) {
+      const retryAccounts = [...failedAccountsQueue];
+      failedAccountsQueue.length = 0; // Clear queue
+      batchUsernames = [...retryAccounts, ...batchUsernames];
+      console.log(`[Instagram Refresh] 🔄 RETRY: Adding ${retryAccounts.length} failed accounts to batch ${batchNum + 1}: ${retryAccounts.join(', ')}`);
+    }
     
     const batchStartTime = Date.now();
     const batchResults: FetchResult[] = [];
     let batchSuccess = 0;
     let batchFailed = 0;
     
-    console.log(`[Instagram Refresh] Batch ${batchNum + 1}/${totalBatches}: Processing ${batchUsernames.join(', ')}`);
+    console.log(`[Instagram Refresh] Batch ${batchNum + 1}/${totalBatches}: Processing ${batchUsernames.length} accounts (${batchUsernames.join(', ')})`);
     
     for (let i = 0; i < batchUsernames.length; i++) {
       const username = batchUsernames[i];
@@ -243,6 +252,9 @@ async function refreshHandler(req: Request) {
         batchSuccess++;
         totalSuccess++;
       } else {
+        // FAILED: Add to queue for retry in next batch
+        failedAccountsQueue.push(username);
+        console.warn(`[Instagram Refresh] ⚠️ ${username} FAILED, will retry in next batch (queue: ${failedAccountsQueue.length})`);
         batchFailed++;
         totalFailed++;
       }
