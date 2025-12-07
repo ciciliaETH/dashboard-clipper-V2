@@ -49,6 +49,8 @@ export async function GET(req: Request) {
       .select('employee_id')
       .eq('campaign_id', campaignId)
     
+    console.log(`[Top Videos] Campaign ${campaignId}: Found ${employees?.length || 0} employees`)
+    
     if (!employees || employees.length === 0) {
       return NextResponse.json({ 
         videos: [], 
@@ -57,7 +59,8 @@ export async function GET(req: Request) {
         platform, 
         start: startISO, 
         end: endISO, 
-        days: windowDays 
+        days: windowDays,
+        debug: { employees_count: 0, reason: 'No employees in campaign' }
       })
     }
 
@@ -90,7 +93,7 @@ export async function GET(req: Request) {
           .map((u: string) => u.toLowerCase().replace(/^@+/, ''))
       ))
 
-      if (tiktokUsernames.length > 0) {
+      console.log(`[Top Videos] TikTok: ${tiktokUsernames.length} usernames to query: ${tiktokUsernames.slice(0, 5).join(', ')}${tiktokUsernames.length > 5 ? '...' : ''}`)
         // Query tiktok_posts_daily for videos in window
         const { data: tiktokPosts } = await supabase
           .from('tiktok_posts_daily')
@@ -101,6 +104,10 @@ export async function GET(req: Request) {
           .order('play_count', { ascending: false })
           .limit(limit * 10) // Get more for hashtag filtering
 
+        console.log(`[Top Videos] TikTok: Found ${tiktokPosts?.length || 0} posts in date range ${startISO} to ${endISO}`)
+
+        // Group by video_id and calculate accrual (delta from first to last snapshot)
+        const videoMap = new Map<string, any[]>()
         // Group by video_id and calculate accrual (delta from first to last snapshot)
         const videoMap = new Map<string, any[]>()
         for (const post of tiktokPosts || []) {
@@ -192,9 +199,9 @@ export async function GET(req: Request) {
         if (p.instagram_username) {
           instagramUsernames.push(p.instagram_username.toLowerCase().replace(/^@+/, ''))
         }
-      }
-
       const uniqueIgUsernames = Array.from(new Set(instagramUsernames))
+
+      console.log(`[Top Videos] Instagram: ${uniqueIgUsernames.length} usernames to query: ${uniqueIgUsernames.slice(0, 5).join(', ')}${uniqueIgUsernames.length > 5 ? '...' : ''}`)
 
       if (uniqueIgUsernames.length > 0) {
         // Query instagram_posts_daily for posts in window
@@ -207,6 +214,10 @@ export async function GET(req: Request) {
           .order('play_count', { ascending: false })
           .limit(limit * 10) // Get more for hashtag filtering
 
+        console.log(`[Top Videos] Instagram: Found ${igPosts?.length || 0} posts in date range ${startISO} to ${endISO}`)
+
+        // Group by id and calculate accrual
+        const videoMap = new Map<string, any[]>()
         // Group by id and calculate accrual
         const videoMap = new Map<string, any[]>()
         for (const post of igPosts || []) {
@@ -264,15 +275,14 @@ export async function GET(req: Request) {
               saves: 0,
               total_engagement: likes + comments
             },
-            snapshots_count: snapshots.length
-          })
-        }
-      }
-    }
-
     // Sort by views descending and limit
     videos.sort((a, b) => b.metrics.views - a.metrics.views)
     const topVideos = videos.slice(0, limit)
+
+    console.log(`[Top Videos] Final: ${videos.length} total videos (TikTok + Instagram), showing top ${topVideos.length}`)
+    if (topVideos.length > 0) {
+      console.log(`[Top Videos] Top video: ${topVideos[0].platform} @${topVideos[0].username} - ${topVideos[0].metrics.views} views`)
+    }
 
     return NextResponse.json({
       videos: topVideos,
@@ -280,6 +290,12 @@ export async function GET(req: Request) {
       required_hashtags: requiredHashtags,
       platform,
       start: startISO,
+      end: endISO,
+      days: windowDays,
+      total_found: videos.length,
+      showing: topVideos.length,
+      filtered_by_hashtag: requiredHashtags && requiredHashtags.length > 0
+    })start: startISO,
       end: endISO,
       days: windowDays,
       total_found: videos.length,
