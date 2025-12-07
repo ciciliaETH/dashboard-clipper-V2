@@ -30,7 +30,7 @@ interface FetchResult {
   duration_ms?: number;
 }
 
-async function fetchInstagramData(username: string, baseUrl: string, timeout = 120000): Promise<FetchResult> {
+async function fetchInstagramData(username: string, baseUrl: string, timeout = 240000): Promise<FetchResult> {
   const start = Date.now();
   try {
     const url = `${baseUrl}/api/fetch-ig/${encodeURIComponent(username)}?create=1&allow_username=0`;
@@ -173,7 +173,7 @@ async function refreshHandler(req: Request) {
   
   let totalSuccess = 0;
   let totalFailed = 0;
-  const maxRetries = 4; // INCREASED: 4 retries for ZERO data loss guarantee
+  const maxRetries = 10; // EMERGENCY: 10 retries for ABSOLUTE ZERO data loss
   
   // Manual batch processing with offset tracking
   const totalBatches = Math.ceil(usernamesToFetch.length / accountsPerBatch);

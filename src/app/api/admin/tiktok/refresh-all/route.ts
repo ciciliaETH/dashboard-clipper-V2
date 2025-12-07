@@ -36,7 +36,7 @@ async function fetchTikTokData(
   startDate: string,
   endDate: string,
   baseUrl: string, 
-  timeout = 120000
+  timeout = 240000
 ): Promise<FetchResult> {
   const start = Date.now();
   try {
@@ -177,7 +177,7 @@ async function refreshHandler(req: Request) {
   
   let totalSuccess = 0;
   let totalFailed = 0;
-  const maxRetries = 4; // INCREASED: 4 retries for ZERO data loss guarantee
+  const maxRetries = 10; // EMERGENCY: 10 retries for ABSOLUTE ZERO data loss tolerance
   
   // Manual batch processing with offset tracking
   const totalBatches = Math.ceil(allUsernames.length / accountsPerBatch);
@@ -221,8 +221,8 @@ async function refreshHandler(req: Request) {
         
         // If rate limited, wait longer before retry
         if (result.status === 429 && attempt < maxRetries) {
-          console.log(`[TikTok Refresh] Rate limited on ${username}, waiting 30s before retry ${attempt + 1}/${maxRetries}`);
-          await new Promise(resolve => setTimeout(resolve, 30000)); // Wait 30 seconds
+          console.log(`[TikTok Refresh] Rate limited on ${username}, waiting 90s before retry ${attempt + 1}/${maxRetries}`);
+          await new Promise(resolve => setTimeout(resolve, 90000)); // Wait 90 seconds - LONG cooldown for rate limits
           attempt++;
           continue;
         }
@@ -230,7 +230,7 @@ async function refreshHandler(req: Request) {
         // If server error or timeout, retry with delay
         if ((result.status >= 500 || result.status === 408) && attempt < maxRetries) {
           console.log(`[TikTok Refresh] Error ${result.status} on ${username}, retrying ${attempt + 1}/${maxRetries}`);
-          await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
+          await new Promise(resolve => setTimeout(resolve, 30000)); // Wait 30 seconds - Longer recovery time
           attempt++;
           continue;
         }
