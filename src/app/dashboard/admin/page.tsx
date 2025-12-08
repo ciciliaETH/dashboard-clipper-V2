@@ -416,7 +416,7 @@ export default function AdminPage() {
     }
   };
 
-  const runTikTokBatch = async (continueSession = false) => {
+  const runTikTokBatch = async (continueSession = false, customOffset?: number) => {
     if (!activeCampaignId) {
       alert('Tidak ada campaign aktif');
       return;
@@ -433,14 +433,17 @@ export default function AdminPage() {
     }
 
     try {
+      // CRITICAL: Use customOffset from auto-continue to avoid React state async issue
+      const currentOffset = customOffset !== undefined ? customOffset : (continueSession ? tikTokOffset : 0);
       console.log('[TikTok Refresh] Starting refresh for campaign:', activeCampaignId);
+      console.log('[TikTok Refresh] Using offset:', currentOffset);
       console.log('[TikTok Refresh] Auto mode:', autoTikTokMode ? 'ENABLED (will process ALL batches)' : 'DISABLED (single batch)');
       
       const res = await fetch('/api/admin/tiktok/refresh-all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          offset: continueSession ? tikTokOffset : 0,
+          offset: currentOffset,
           include_details: true,
           auto_continue: autoTikTokMode // CRITICAL: Enable unlimited batch processing in Auto mode
         })
@@ -464,6 +467,7 @@ export default function AdminPage() {
       if (!res.ok) throw new Error(j?.error || 'Gagal refresh TikTok');
 
       // Update offset for next batch
+      const nextOffset = j.next_offset || tikTokOffset;
       if (j.next_offset) {
         setTikTokOffset(j.next_offset);
       }
@@ -491,8 +495,12 @@ export default function AdminPage() {
       // AUTO-CONTINUE MODE: Automatically continue to next batch
       if (j.remaining > 0) {
         if (autoTikTokMode) {
-          console.log(`[AUTO MODE] ${j.remaining} accounts remaining, continuing in 2 seconds...`);
-          setTimeout(() => runTikTokBatch(true), 2000); // Auto-continue after 2s
+          console.log(`[AUTO MODE] ${j.remaining} accounts remaining, continuing in 2 seconds with offset=${nextOffset}...`);
+          // CRITICAL FIX: Pass nextOffset directly as parameter to avoid React state async issue
+          setTimeout(() => {
+            setTikTokOffset(nextOffset); // Update state for UI display
+            runTikTokBatch(true, nextOffset); // Pass offset directly to avoid stale closure
+          }, 2000);
         } else {
           setShowTikTokContinueDialog(true);
         }
