@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { createClient as createServerSSR } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 300; // 5 minutes - processes multiple accounts with RapidAPI
+export const maxDuration = 60; // 60s Vercel Hobby limit - process 1 account per request
 
 function adminClient() {
   return createClient(
@@ -30,7 +30,7 @@ interface FetchResult {
   duration_ms?: number;
 }
 
-async function fetchInstagramData(username: string, baseUrl: string, timeout = 60000): Promise<FetchResult> {
+async function fetchInstagramData(username: string, baseUrl: string, timeout = 20000): Promise<FetchResult> {
   const start = Date.now();
   try {
     const url = `${baseUrl}/api/fetch-ig/${encodeURIComponent(username)}?create=1&allow_username=0`;
@@ -105,9 +105,10 @@ async function refreshHandler(req: Request) {
   const delayMs = Math.max(0, Math.min(30000, Number(body?.delay_ms || 2000))); // Default 2 seconds (FASTER)
   const limit = Math.max(1, Math.min(10000, Number(body?.limit || 1000)));
   const onlyWithUserId = body?.only_with_user_id === true; // default FALSE - fetch all usernames
-  const accountsPerBatch = 3; // Process 3 accounts per batch (AVOID 300s TIMEOUT!)
+  const accountsPerBatch = 1; // Process 1 account per batch (FIT within 60s Vercel limit!)
   const autoContinue = body?.auto_continue === true; // default FALSE - manual batch to prevent timeout
   const offset = Math.max(0, Number(body?.offset || 0)); // Track which batch we're on
+  const fetchTimeout = 20000; // 20s timeout (max 2 attempts = 20s + 5s + 20s = 45s < 60s Vercel limit)
   
   // Get base URL for fetch-ig endpoint
   const protocol = req.headers.get('x-forwarded-proto') || 'http';
@@ -115,10 +116,12 @@ async function refreshHandler(req: Request) {
   const baseUrl = `${protocol}://${host}`;
 
   // Get ALL unique Instagram usernames from ALL campaign_instagram_participants (no date filter!)
+  // CRITICAL: ORDER BY ensures consistent username order across all requests
   const { data: rows } = await supa
     .from('campaign_instagram_participants')
     .select('instagram_username')
     .not('instagram_username', 'is', null)
+    .order('instagram_username', { ascending: true }) // Alphabetical order for consistency
     .limit(limit);
   
   if (!rows || rows.length === 0) {
@@ -173,13 +176,14 @@ async function refreshHandler(req: Request) {
   
   let totalSuccess = 0;
   let totalFailed = 0;
-  const maxRetries = 999; // UNLIMITED: Retry as many times as needed - data MUST exist
+  const maxRetries = 1; // Retry 1x only (fit within 60s Vercel timeout)
   const failedAccountsQueue: string[] = []; // Track failed accounts to retry in next batch
   
-  // Manual batch processing with offset tracking
+  // CRITICAL: ALWAYS process ONLY 1 batch per request to avoid timeout
+  // Client will auto-trigger next batch via setTimeout in admin page
   const totalBatches = Math.ceil(usernamesToFetch.length / accountsPerBatch);
   const startBatch = Math.floor(offset / accountsPerBatch);
-  const endBatch = autoContinue ? totalBatches : startBatch + 1; // Only process 1 batch unless auto-continue
+  const endBatch = startBatch + 1; // ALWAYS 1 batch only (client handles continuation)
   
   for (let batchNum = startBatch; batchNum < endBatch; batchNum++) {
     const batchStart = batchNum * accountsPerBatch;
@@ -209,25 +213,25 @@ async function refreshHandler(req: Request) {
       let attempt = 0;
       
       while (attempt <= maxRetries) {
-        result = await fetchInstagramData(username, baseUrl);
+        result = await fetchInstagramData(username, baseUrl, fetchTimeout);
         
         // Success - break retry loop
         if (result.ok) {
           break;
         }
         
-        // If rate limited, wait longer before retry
+        // If rate limited, wait shorter to fit in 60s timeout
         if (result.status === 429 && attempt < maxRetries) {
-          console.log(`[Instagram Refresh] Rate limited on ${username}, waiting 30s before retry ${attempt + 1}/${maxRetries}`);
-          await new Promise(resolve => setTimeout(resolve, 30000)); // Wait 30 seconds
+          console.log(`[Instagram Refresh] Rate limited on ${username}, waiting 10s before retry ${attempt + 1}/${maxRetries}`);
+          await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds only (must fit in 60s total)
           attempt++;
           continue;
         }
         
-        // If server error or timeout, retry with delay
+        // If server error or timeout, retry with short delay
         if ((result.status >= 500 || result.status === 408) && attempt < maxRetries) {
           console.log(`[Instagram Refresh] Error ${result.status} on ${username}, retrying ${attempt + 1}/${maxRetries}`);
-          await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
+          await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds only (must fit in 60s total)
           attempt++;
           continue;
         }
