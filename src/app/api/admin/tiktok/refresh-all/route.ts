@@ -115,6 +115,7 @@ async function refreshHandler(req: Request) {
     const accountsPerBatch = 1; // Process 1 account per batch (FIT within 60s Vercel limit!)
     const autoContinue = body?.auto_continue === true; // default FALSE - manual batch to prevent timeout
     const offset = Math.max(0, Number(body?.offset || 0)); // Track which batch we're on
+    const fetchTimeout = 20000; // 20s timeout (max 2 attempts = 20s + 5s + 20s = 45s < 60s Vercel limit)
     
     // Get base URL for fetch-metrics endpoint
     const protocol = req.headers.get('x-forwarded-proto') || 'http';
@@ -225,7 +226,7 @@ async function refreshHandler(req: Request) {
       let attempt = 0;
       
       while (attempt <= maxRetries) {
-        result = await fetchTikTokData(username, campaignId, startDate, endDate, baseUrl);
+        result = await fetchTikTokData(username, campaignId, startDate, endDate, baseUrl, fetchTimeout);
         
         // Success - break retry loop
         if (result.ok) {
