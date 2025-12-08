@@ -122,10 +122,12 @@ async function refreshHandler(req: Request) {
     const baseUrl = `${protocol}://${host}`;
     
     // Get ALL unique TikTok usernames from ALL campaign_participants (no date filter!)
+    // CRITICAL: ORDER BY ensures consistent username order across all requests
     const { data: rows, error: dbError } = await supa
       .from('campaign_participants')
       .select('tiktok_username, campaign_id')
       .not('tiktok_username', 'is', null)
+      .order('tiktok_username', { ascending: true }) // Alphabetical order for consistency
       .limit(limit);
     
     if (dbError) {
@@ -177,7 +179,7 @@ async function refreshHandler(req: Request) {
   
   let totalSuccess = 0;
   let totalFailed = 0;
-  const maxRetries = 3; // Retry 3x per batch (not unlimited - avoid timeout loops)
+  const maxRetries = 1; // Retry 1x only (fit within 60s Vercel timeout)
   const failedAccountsQueue: string[] = []; // Track failed accounts to retry in next batch
   
   // CRITICAL: ALWAYS process ONLY 1 batch per request to avoid timeout
@@ -230,18 +232,18 @@ async function refreshHandler(req: Request) {
           break;
         }
         
-        // If rate limited, wait longer before retry
+        // If rate limited, wait shorter to fit in 60s timeout
         if (result.status === 429 && attempt < maxRetries) {
-          console.log(`[TikTok Refresh] Rate limited on ${username}, waiting 90s before retry ${attempt + 1}/${maxRetries}`);
-          await new Promise(resolve => setTimeout(resolve, 90000)); // Wait 90 seconds - LONG cooldown for rate limits
+          console.log(`[TikTok Refresh] Rate limited on ${username}, waiting 10s before retry ${attempt + 1}/${maxRetries}`);
+          await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds only (must fit in 60s total)
           attempt++;
           continue;
         }
         
-        // If server error or timeout, retry with delay
+        // If server error or timeout, retry with short delay
         if ((result.status >= 500 || result.status === 408) && attempt < maxRetries) {
           console.log(`[TikTok Refresh] Error ${result.status} on ${username}, retrying ${attempt + 1}/${maxRetries}`);
-          await new Promise(resolve => setTimeout(resolve, 30000)); // Wait 30 seconds - Longer recovery time
+          await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds only (must fit in 60s total)
           attempt++;
           continue;
         }
