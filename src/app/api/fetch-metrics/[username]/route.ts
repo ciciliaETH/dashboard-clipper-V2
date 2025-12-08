@@ -6,14 +6,26 @@ import { rapidApiRequest } from '@/lib/rapidapi';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300; // 5 minutes - aggregator + RapidAPI fallback
-// DIRECT RAPIDAPI ONLY - NO AGGREGATOR OR EDGE FUNCTIONS
+
+// ========================================
+// AGGREGATOR API - PRIORITY #1 (UNLIMITED)
+// ========================================
+const AGGREGATOR_BASE = process.env.AGGREGATOR_API_BASE || 'http://202.10.44.90/api/v1';
+const AGGREGATOR_ENABLED = process.env.AGGREGATOR_ENABLED !== '0'; // Default: enabled
+const AGGREGATOR_UNLIMITED = process.env.AGGREGATOR_UNLIMITED !== '0'; // Default: unlimited
+const AGGREGATOR_MAX_PAGES = Number(process.env.AGGREGATOR_MAX_PAGES || '999'); // High limit
+const AGGREGATOR_PER_PAGE = Number(process.env.AGGREGATOR_PER_PAGE || '1000'); // Max per request
+const AGGREGATOR_RATE_MS = Number(process.env.AGGREGATOR_RATE_MS || '500'); // Rate limit
+
+// ========================================
+// RAPIDAPI - FALLBACK #2
+// ========================================
 const TIKTOK_RAPID_HOST = process.env.RAPIDAPI_TIKTOK_HOST || 'tiktok-scraper7.p.rapidapi.com';
 const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY!;
-// Backfill-only RapidAPI cursor mode (fast reliable data scraper)
 const RAPID_CURSOR_ON = process.env.RAPIDAPI_USE_CURSOR === '1';
 const RAPID_PROVIDER = (process.env.RAPIDAPI_PROVIDER || 'fast').toLowerCase(); // 'fast' | 'api15'
 const RAPID_FALLBACK_ON_429 = process.env.RAPIDAPI_FALLBACK_ON_429 !== '0';
-const RAPID_CURSOR_MAX_ITER = Number(process.env.RAPIDAPI_MAX_ITER || '400');
+const RAPID_CURSOR_MAX_ITER = Number(process.env.RAPIDAPI_MAX_ITER || '999'); // Unlimited
 const RAPID_CURSOR_RATE_MS = Number(process.env.RAPIDAPI_RATE_LIMIT_MS || '350');
 const RAPID_CURSOR_LIMIT = process.env.RAPIDAPI_LIMIT ? Number(process.env.RAPIDAPI_LIMIT) : undefined;
 
@@ -97,6 +109,140 @@ function deriveVideoIds(post: any): { video_id?: string; aweme_id?: string } {
 function deriveVideoId(post: any): string | undefined {
   const ids = deriveVideoIds(post);
   return ids.video_id || ids.aweme_id;
+}
+
+// ========================================
+// AGGREGATOR API FETCH (UNLIMITED)
+// ========================================
+async function fetchFromAggregator(
+  username: string,
+  startDate?: string | null,
+  endDate?: string | null
+): Promise<{ videos: any[]; success: boolean; source: 'aggregator'; totalFetched: number }> {
+  const normalized = username.replace(/^@/, '').toLowerCase();
+  const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+  const seen = new Set<string>();
+  const allVideos: any[] = [];
+  
+  console.log(`[Aggregator] Starting unlimited fetch for @${normalized}`);
+  console.log(`[Aggregator] Date range: ${startDate || 'ALL'} to ${endDate || 'NOW'}`);
+  
+  // Strategy: Fetch in 90-day windows for deep historical data
+  const now = new Date();
+  const endBound = endDate ? new Date(endDate + 'T23:59:59Z') : now;
+  const startBound = startDate ? new Date(startDate + 'T00:00:00Z') : new Date('2016-01-01'); // TikTok launch
+  
+  let windowEnd = new Date(endBound);
+  let totalPages = 0;
+  let emptyWindows = 0;
+  
+  // Fetch in reverse chronological order (newest to oldest)
+  while (windowEnd > startBound && emptyWindows < 3) {
+    // 90-day window for efficient pagination
+    const windowStart = new Date(Math.max(
+      startBound.getTime(),
+      windowEnd.getTime() - (90 * 24 * 60 * 60 * 1000)
+    ));
+    
+    const windowStartStr = windowStart.toISOString().slice(0, 10);
+    const windowEndStr = windowEnd.toISOString().slice(0, 10);
+    
+    console.log(`[Aggregator] Window: ${windowStartStr} to ${windowEndStr}`);
+    
+    let cursor: string | undefined = undefined;
+    let windowVideos = 0;
+    let sameCursor = 0;
+    let noNewData = 0;
+    
+    for (let page = 0; page < AGGREGATOR_MAX_PAGES; page++) {
+      totalPages++;
+      
+      try {
+        const url = new URL(`${AGGREGATOR_BASE}/user/posts`);
+        url.searchParams.set('username', normalized);
+        url.searchParams.set('count', String(AGGREGATOR_PER_PAGE));
+        url.searchParams.set('start', windowStartStr);
+        url.searchParams.set('end', windowEndStr);
+        if (cursor) url.searchParams.set('cursor', cursor);
+        
+        const response = await fetch(url.toString(), {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json'
+          },
+          signal: AbortSignal.timeout(30000)
+        });
+        
+        if (!response.ok) {
+          console.error(`[Aggregator] HTTP ${response.status} on page ${page + 1}`);
+          break;
+        }
+        
+        const json = await response.json();
+        const videos = json?.data?.videos || [];
+        
+        if (!Array.isArray(videos) || videos.length === 0) {
+          noNewData++;
+          if (noNewData >= 2) break; // No more data in this window
+        }
+        
+        let addedThisPage = 0;
+        for (const video of videos) {
+          const videoId = video.aweme_id || video.video_id || video.id;
+          const key = String(videoId || '');
+          if (!key || seen.has(key)) continue;
+          
+          seen.add(key);
+          allVideos.push(video);
+          addedThisPage++;
+          windowVideos++;
+        }
+        
+        console.log(`[Aggregator] Page ${page + 1}: +${addedThisPage} videos (window total: ${windowVideos})`);
+        
+        if (addedThisPage > 0) noNewData = 0;
+        
+        // Check for next cursor
+        const nextCursor = json?.data?.cursor || json?.data?.next_cursor;
+        const hasMore = json?.data?.hasMore || json?.data?.has_more;
+        
+        if (!hasMore || !nextCursor) break;
+        
+        if (cursor === nextCursor) {
+          sameCursor++;
+          if (sameCursor >= 2) break;
+        } else {
+          sameCursor = 0;
+        }
+        
+        cursor = String(nextCursor);
+        await sleep(AGGREGATOR_RATE_MS);
+        
+      } catch (error: any) {
+        console.error(`[Aggregator] Error on page ${page + 1}:`, error.message);
+        break;
+      }
+    }
+    
+    if (windowVideos === 0) {
+      emptyWindows++;
+    } else {
+      emptyWindows = 0;
+    }
+    
+    // Move to previous window
+    windowEnd = new Date(windowStart.getTime() - 1);
+    await sleep(AGGREGATOR_RATE_MS);
+  }
+  
+  console.log(`[Aggregator] Completed: ${allVideos.length} unique videos from ${totalPages} pages`);
+  
+  return {
+    videos: allVideos,
+    success: allVideos.length > 0,
+    source: 'aggregator',
+    totalFetched: allVideos.length
+  };
 }
 
 // Helper to read stats across different shapes
@@ -367,17 +513,55 @@ export async function GET(request: Request, context: any) {
   }
   const { id: userId, tiktok_username, tiktok_sec_uid } = userData as { id: string; tiktok_username: string; tiktok_sec_uid: string | null };
 
-  // Helper: fetch all videos via RapidAPI tiktok-scraper7
-  const fetchAllVideos = async (): Promise<any[]> => {
-    const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
-    const perPage = clamp(Number(countParam ?? '100'), 20, 1000);
-    // pages: 0 = unlimited (CURSOR MODE ENABLED BY DEFAULT)
-    let maxPages = 0; // Default unlimited untuk dapat semua video
-    if (allParam === '0') maxPages = Number(process.env.USER_REFRESH_MAX_PAGES || '6'); // Reverse: all=0 untuk limit
-    if (pagesParam !== null) {
-      const p = Number(pagesParam);
-      if (!Number.isNaN(p)) maxPages = p;
+  // ========================================
+  // MAIN FETCH LOGIC: Aggregator → RapidAPI
+  // ========================================
+  let videos: any[] = [];
+  let fetchSource = 'none';
+  let fetchTelemetry: any = {};
+  
+  // PRIORITY 1: Try Aggregator API (UNLIMITED) unless ?rapid=1
+  if (AGGREGATOR_ENABLED && rapidParam !== '1') {
+    console.log(`[TikTok Fetch] Trying Aggregator API first for @${normalized}`);
+    try {
+      const aggregatorResult = await fetchFromAggregator(normalized, startParam, endParam);
+      
+      if (aggregatorResult.success && aggregatorResult.videos.length > 0) {
+        videos = aggregatorResult.videos;
+        fetchSource = 'aggregator';
+        fetchTelemetry = {
+          source: 'aggregator',
+          totalVideos: aggregatorResult.totalFetched,
+          success: true
+        };
+        console.log(`[TikTok Fetch] ✓ Aggregator success: ${videos.length} videos`);
+      } else {
+        console.log(`[TikTok Fetch] ✗ Aggregator returned no data, falling back to RapidAPI`);
+      }
+    } catch (error: any) {
+      console.error(`[TikTok Fetch] Aggregator error:`, error.message);
+      console.log(`[TikTok Fetch] Falling back to RapidAPI`);
     }
+  }
+  
+  // PRIORITY 2: Fallback to RapidAPI if Aggregator failed or forced
+  if (videos.length === 0 || rapidParam === '1') {
+    if (rapidParam === '1') {
+      console.log(`[TikTok Fetch] RapidAPI forced via ?rapid=1`);
+    }
+    console.log(`[TikTok Fetch] Using RapidAPI for @${normalized}`);
+    
+    // Helper: fetch all videos via RapidAPI (UNLIMITED MODE)
+    const fetchAllVideosRapid = async (): Promise<any[]> => {
+      const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
+      const perPage = clamp(Number(countParam ?? '100'), 20, 1000);
+      // UNLIMITED MODE: Default to no page limit
+      let maxPages = 0; // 0 = unlimited
+      if (allParam === '0') maxPages = Number(process.env.USER_REFRESH_MAX_PAGES || '6'); // Reverse: all=0 untuk limit
+      if (pagesParam !== null) {
+        const p = Number(pagesParam);
+        if (!Number.isNaN(p)) maxPages = p;
+      }
     const seen = new Set<string>();
     const out: any[] = [];
     let cursor: string | undefined = undefined;
@@ -442,6 +626,28 @@ export async function GET(request: Request, context: any) {
     }
     return out;
   };
+    
+    // Execute RapidAPI fetch
+    try {
+      videos = await fetchAllVideosRapid();
+      fetchSource = 'rapidapi';
+      fetchTelemetry = {
+        source: 'rapidapi',
+        totalVideos: videos.length,
+        success: true
+      };
+      console.log(`[TikTok Fetch] ✓ RapidAPI success: ${videos.length} videos`);
+    } catch (error: any) {
+      console.error(`[TikTok Fetch] RapidAPI error:`, error.message);
+      fetchTelemetry = {
+        source: 'rapidapi',
+        error: error.message,
+        success: false
+      };
+    }
+  }
+  
+  console.log(`[TikTok Fetch] Final result: ${videos.length} videos from ${fetchSource}`);
 
   // RapidAPI Fast Reliable Data Scraper cursor fetch (primary when RAPIDAPI_USE_CURSOR=1)
   const rapidFastCursorFetchAll = async (): Promise<{ list: any[]; telemetry: any } | any[]> => {
@@ -749,51 +955,134 @@ export async function GET(request: Request, context: any) {
       return NextResponse.json({ tiktok: { ...totals, followers }, page: { hasMore, nextCursor }, source: 'external' });
     } // End of pageMode block
     
-    // Source selection - HYBRID MODE: Aggregator PRIMARY, RapidAPI FALLBACK
+    // ========================================
+    // UNLIMITED SYNC WITH AGGREGATOR PRIORITY
+    // ========================================
     let videos: any[] = [];
     let telemetry: any = undefined;
     const FORCE_RAPID = rapidParam === '1';
-    const AGG_BASE = process.env.AGGREGATOR_BASE;
-    const useAggregator = AGG_BASE && !FORCE_RAPID; // Aggregator available and not forced to RapidAPI
     
-    if (useAggregator) {
-      // PRIMARY: Try aggregator first (proven stable)
-      console.log(`[TikTok Fetch] ${normalized}: Trying AGGREGATOR (primary)...`);
-      try {
-        const aggUrl = `${AGG_BASE}/user/posts?username=${encodeURIComponent(normalized)}`;
-        const aggTimeout = 30000; // 30s timeout
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), aggTimeout);
+    // AGGREGATOR UNLIMITED FETCH - 90-DAY ROLLING WINDOWS
+    const fetchFromAggregator = async (): Promise<any[]> => {
+      if (!AGGREGATOR_ENABLED || FORCE_RAPID) return [];
+      
+      console.log(`[TikTok Fetch] Trying Aggregator API first for @${normalized}`);
+      console.log(`[Aggregator] Starting unlimited fetch for @${normalized}`);
+      
+      const allVideos: any[] = [];
+      const seenIds = new Set<string>();
+      let totalPages = 0;
+      
+      // Calculate date range
+      const endDate = endBound ? new Date(endBound) : new Date();
+      const startDate = startBound ? new Date(startBound) : new Date(endDate.getTime() - 180 * 86400000); // 180 days default
+      
+      console.log(`[Aggregator] Date range: ${startDate.toISOString().slice(0,10)} to ${endDate.toISOString().slice(0,10)}`);
+      
+      // Create 90-day windows (reverse chronological for recent data first)
+      const windows: { start: Date; end: Date }[] = [];
+      let currentEnd = new Date(endDate);
+      
+      while (currentEnd > startDate) {
+        const currentStart = new Date(Math.max(currentEnd.getTime() - 90 * 86400000, startDate.getTime()));
+        windows.push({ start: currentStart, end: currentEnd });
+        currentEnd = new Date(currentStart.getTime() - 86400000); // Move to day before
+      }
+      
+      // Process each window
+      for (const window of windows) {
+        const startTime = Math.floor(window.start.getTime() / 1000);
+        const endTime = Math.floor(window.end.getTime() / 1000);
         
-        const res = await fetch(aggUrl, { signal: controller.signal });
-        clearTimeout(timer);
+        console.log(`[Aggregator] Window: ${window.start.toISOString().slice(0,10)} to ${window.end.toISOString().slice(0,10)}`);
         
-        if (res.ok) {
-          const data = await res.json();
-          // Aggregator response format: { videos: [...] } or { data: { videos: [...] } }
-          const aggVideos = data?.data?.videos || data?.videos || data?.items || [];
-          
-          if (aggVideos.length > 0) {
-            videos = aggVideos;
-            telemetry = { mode: 'aggregator', username: normalized, source: AGG_BASE, videos_count: aggVideos.length };
-            console.log(`[TikTok Fetch] ${normalized}: Aggregator SUCCESS - ${aggVideos.length} videos`);
-          } else {
-            console.warn(`[TikTok Fetch] ${normalized}: Aggregator returned 0 videos, trying RapidAPI fallback...`);
+        let windowVideos = 0;
+        let page = 1;
+        let hasMore = true;
+        
+        while (hasMore && page <= AGGREGATOR_MAX_PAGES) {
+          try {
+            const url = `${AGGREGATOR_BASE}/user/posts?username=${encodeURIComponent(normalized)}&start_time=${startTime}&end_time=${endTime}&count=${AGGREGATOR_PER_PAGE}&page=${page}`;
+            
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 30000);
+            
+            const res = await fetch(url, { signal: controller.signal });
+            clearTimeout(timer);
+            
+            if (!res.ok) {
+              console.warn(`[Aggregator] Page ${page} failed: ${res.status}`);
+              break;
+            }
+            
+            const data = await res.json();
+            const pageVideos = data?.data?.videos || data?.videos || [];
+            
+            let newVideos = 0;
+            for (const video of pageVideos) {
+              const videoId = video?.video_id || video?.aweme_id || video?.id;
+              if (!videoId) continue;
+              
+              const id = String(videoId);
+              if (seenIds.has(id)) continue;
+              
+              seenIds.add(id);
+              allVideos.push(video);
+              newVideos++;
+              windowVideos++;
+            }
+            
+            totalPages++;
+            console.log(`[Aggregator] Page ${page}: +${newVideos} videos (window total: ${windowVideos})`);
+            
+            // Stop if no new videos (reached end)
+            if (newVideos === 0) {
+              hasMore = false;
+            } else {
+              page++;
+              await new Promise(resolve => setTimeout(resolve, AGGREGATOR_RATE_MS));
+            }
+          } catch (err: any) {
+            console.error(`[Aggregator] Page ${page} error:`, err.message);
+            break;
           }
+        }
+        
+        // If window returned videos, continue to older windows
+        // If no videos in recent window, likely account has no older content
+        if (windowVideos === 0 && windows.indexOf(window) === 0) {
+          console.log(`[Aggregator] No videos in most recent window, skipping older windows`);
+          break;
+        }
+      }
+      
+      console.log(`[Aggregator] Completed: ${allVideos.length} unique videos from ${totalPages} pages`);
+      return allVideos;
+    };
+    
+    // TRY AGGREGATOR FIRST (PRIORITY #1)
+    if (AGGREGATOR_ENABLED && !FORCE_RAPID) {
+      try {
+        const aggVideos = await fetchFromAggregator();
+        if (aggVideos.length > 0) {
+          videos = aggVideos;
+          telemetry = { mode: 'aggregator', username: normalized, source: AGGREGATOR_BASE, videos_count: aggVideos.length };
+          console.log(`[TikTok Fetch] ✓ Aggregator success: ${aggVideos.length} videos`);
         } else {
-          console.warn(`[TikTok Fetch] ${normalized}: Aggregator failed (${res.status}), trying RapidAPI fallback...`);
+          console.log(`[TikTok Fetch] ✗ Aggregator returned 0 videos, falling back to RapidAPI...`);
         }
       } catch (err: any) {
-        console.warn(`[TikTok Fetch] ${normalized}: Aggregator error (${err.message}), trying RapidAPI fallback...`);
+        console.error(`[TikTok Fetch] ✗ Aggregator failed:`, err.message);
+        console.log(`[TikTok Fetch] Falling back to RapidAPI...`);
       }
     }
     
-    // FALLBACK: If aggregator failed or returned 0 videos, use RapidAPI
-    const useRapidCursor = FORCE_RAPID || RAPID_CURSOR_ON || videos.length === 0;
+    // FALLBACK TO RAPIDAPI IF NEEDED
+    const useRapidCursor = FORCE_RAPID || videos.length === 0;
     const providerOverride = providerParam === 'api15' || providerParam === 'fast' ? providerParam : undefined;
     
-    if (useRapidCursor && videos.length === 0) {
-      // Backfill mode: choose RapidAPI provider
+    if (useRapidCursor) {
+      console.log(`[TikTok Fetch] Using RapidAPI fallback for @${normalized}...`);
       const provider = providerOverride || RAPID_PROVIDER;
       if (provider === 'api15') {
         const rf = await rapidApi15CursorFetchAll();
@@ -826,10 +1115,12 @@ export async function GET(request: Request, context: any) {
           }
         }
       }
-    } else {
-      // Use RapidAPI directly
-      videos = await rapidFetchAll();
     }
+    
+    // FINAL RESULT LOG
+    console.log(`[TikTok Fetch] Final result: ${videos.length} videos from ${telemetry?.mode || 'rapidapi'}`);
+    
+    // VIDEO ENRICHMENT - Backfill missing stats from tikwm.com
     videos = await Promise.all(videos.map(async (v: any) => {
       const coreCount = readStat(v,'play') || readStat(v,'digg') || readStat(v,'comment');
       const vid = v.aweme_id || v.video_id || deriveVideoId(v);

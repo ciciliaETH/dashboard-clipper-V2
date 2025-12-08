@@ -36,7 +36,7 @@ async function fetchTikTokData(
   startDate: string,
   endDate: string,
   baseUrl: string, 
-  timeout = 60000
+  timeout = 300000 // 5 minutes - match fetch-metrics maxDuration for unlimited sync
 ): Promise<FetchResult> {
   const start = Date.now();
   try {
@@ -209,9 +209,10 @@ async function refreshHandler(req: Request) {
       const username = batchUsernames[i];
       const campaignIds = usernameToCampaigns.get(username) || [];
       
-      // Use a wide date range to get all data (last 6 months to today)
+      // Use FULL YEAR date range to guarantee ALL historical data (365 days = 1 year)
+      // This ensures we capture videos from August that went viral in December
       const endDate = new Date().toISOString().slice(0, 10);
-      const startDate = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const startDate = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
       
       // Use first campaign_id for the fetch (doesn't matter which, we get same TikTok data)
       const campaignId = campaignIds[0] || 'default';

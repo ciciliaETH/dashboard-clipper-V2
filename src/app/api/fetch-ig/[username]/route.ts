@@ -9,7 +9,16 @@ import { resolveUserIdViaLink, resolveUserId } from './resolvers';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300; // 5 minutes - aggregator + RapidAPI fallback
 
-const AGG_BASE = process.env.AGGREGATOR_BASE; // http://202.10.44.90/api/v1
+// ============================================
+// AGGREGATOR API CONFIGURATION (Instagram)
+// ============================================
+const AGG_BASE = process.env.AGGREGATOR_BASE || 'http://202.10.44.90/api/v1';
+const AGG_IG_ENABLED = (process.env.AGGREGATOR_ENABLED !== '0');
+const AGG_IG_UNLIMITED = (process.env.AGGREGATOR_UNLIMITED !== '0');
+const AGG_IG_MAX_PAGES = Number(process.env.AGGREGATOR_MAX_PAGES || 999);
+const AGG_IG_RATE_MS = Number(process.env.AGGREGATOR_RATE_MS || 500);
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 function admin() {
   return createAdmin(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
@@ -40,83 +49,150 @@ export async function GET(req: Request, context: any) {
   const supa = admin();
   const upserts: any[] = [];
   let source = 'aggregator';
+  let fetchTelemetry: any = null;
   
   try {
     // ============================================
-    // STEP 1: Try AGGREGATOR FIRST (PRIMARY)
+    // STEP 1: Try AGGREGATOR FIRST (UNLIMITED PAGINATION)
     // ============================================
-    if (AGG_BASE) {
+    if (AGG_BASE && AGG_IG_ENABLED) {
       try {
-        const aggUrl = `${AGG_BASE}/instagram/reels?username=${encodeURIComponent(norm)}`;
-        console.log(`[fetch-ig] Trying AGGREGATOR: ${aggUrl}`);
+        console.log(`[IG Fetch] 🎯 Starting Aggregator unlimited fetch for @${norm}`);
         
-        const aggController = new AbortController();
-        const aggTimeout = setTimeout(() => aggController.abort(), 30000); // 30s timeout
+        const allReels: any[] = [];
+        const seenIds = new Set<string>();
+        let currentCursor: string | null = null;
+        let pageNum = 0;
+        let consecutiveSameCursor = 0;
+        let lastCursor: string | null = null;
         
-        const aggResp = await fetch(aggUrl, { 
-          signal: aggController.signal,
-          headers: { 'Content-Type': 'application/json' }
-        });
-        clearTimeout(aggTimeout);
-        
-        if (aggResp.ok) {
+        // Unlimited pagination loop
+        while (pageNum < AGG_IG_MAX_PAGES) {
+          pageNum++;
+          
+          // Build URL with cursor if available
+          let aggUrl = `${AGG_BASE}/instagram/reels?username=${encodeURIComponent(norm)}`;
+          if (currentCursor) {
+            aggUrl += `&end_cursor=${encodeURIComponent(currentCursor)}`;
+          }
+          
+          console.log(`[IG Fetch] 📄 Page ${pageNum}: Fetching from Aggregator...`);
+          
+          const aggController = new AbortController();
+          const aggTimeout = setTimeout(() => aggController.abort(), 30000);
+          
+          const aggResp = await fetch(aggUrl, { 
+            signal: aggController.signal,
+            headers: { 'Content-Type': 'application/json' }
+          });
+          clearTimeout(aggTimeout);
+          
+          if (!aggResp.ok) {
+            console.log(`[IG Fetch] ✗ Aggregator HTTP ${aggResp.status} on page ${pageNum}`);
+            break;
+          }
+          
           const aggData = await aggResp.json();
           const aggReels = aggData?.data?.reels || [];
+          const pageInfo = aggData?.data?.page_info || {};
+          const hasNextPage = pageInfo?.has_next_page || pageInfo?.more_available || false;
+          const nextCursor = pageInfo?.end_cursor || null;
           
-          if (aggReels.length > 0) {
-            console.log(`[fetch-ig] ✅ AGGREGATOR SUCCESS: ${aggReels.length} reels for @${norm}`);
+          // Process reels from this page
+          let newReelsCount = 0;
+          for (const reel of aggReels) {
+            const id = String(reel?.id || '');
+            if (!id || seenIds.has(id)) continue;
             
-            for (const reel of aggReels) {
-              const id = String(reel?.id || '');
-              const code = String(reel?.code || '');
-              if (!id) continue;
-              
-              const takenAt = Number(reel?.taken_at || 0);
-              if (!takenAt) continue;
-              
-              const post_date = new Date(takenAt * 1000).toISOString().slice(0, 10);
-              const caption = String(reel?.caption || '');
-              const play = Number(reel?.play_count || reel?.ig_play_count || 0);
-              const like = Number(reel?.like_count || 0);
-              const comment = Number(reel?.comment_count || 0);
-              
-              upserts.push({ 
-                id, 
-                code: code || null, 
-                caption: caption || null, 
-                username: norm, 
-                post_date, 
-                play_count: play, 
-                like_count: like, 
-                comment_count: comment 
-              });
-            }
+            seenIds.add(id);
+            newReelsCount++;
             
-            source = 'aggregator';
+            const code = String(reel?.code || '');
+            const takenAt = Number(reel?.taken_at || 0);
+            if (!takenAt) continue;
             
-            // SUCCESS - skip RapidAPI
-            if (upserts.length > 0) {
-              await supa.from('instagram_posts_daily').upsert(upserts, { onConflict: 'id,post_date' });
-              return NextResponse.json({ 
-                success: true, 
-                source, 
-                username: norm, 
-                inserted: upserts.length, 
-                total_views: upserts.reduce((s, u) => s + u.play_count, 0) 
-              });
+            const post_date = new Date(takenAt * 1000).toISOString().slice(0, 10);
+            const caption = String(reel?.caption || '');
+            const play = Number(reel?.play_count || reel?.ig_play_count || 0);
+            const like = Number(reel?.like_count || 0);
+            const comment = Number(reel?.comment_count || 0);
+            
+            allReels.push({ 
+              id, 
+              code: code || null, 
+              caption: caption || null, 
+              username: norm, 
+              post_date, 
+              play_count: play, 
+              like_count: like, 
+              comment_count: comment 
+            });
+          }
+          
+          console.log(`[IG Fetch] ✓ Page ${pageNum}: +${newReelsCount} new reels (total: ${allReels.length})`);
+          
+          // Check for termination conditions
+          if (!hasNextPage || !nextCursor) {
+            console.log(`[IG Fetch] ✅ Completed: No more pages (hasNextPage=${hasNextPage}, cursor=${nextCursor})`);
+            break;
+          }
+          
+          // Same cursor detection (prevent infinite loops)
+          if (nextCursor === lastCursor) {
+            consecutiveSameCursor++;
+            if (consecutiveSameCursor >= 2) {
+              console.log(`[IG Fetch] ⚠️ Same cursor detected ${consecutiveSameCursor} times, stopping`);
+              break;
             }
           } else {
-            console.log(`[fetch-ig] ⚠️ Aggregator returned 0 reels, trying RapidAPI fallback...`);
+            consecutiveSameCursor = 0;
+          }
+          
+          lastCursor = currentCursor;
+          currentCursor = nextCursor;
+          
+          // Rate limiting
+          await sleep(AGG_IG_RATE_MS);
+        }
+        
+        if (allReels.length > 0) {
+          console.log(`[IG Fetch] ✅ Aggregator COMPLETE: ${allReels.length} reels, ${pageNum} pages`);
+          
+          upserts.push(...allReels);
+          source = 'aggregator';
+          fetchTelemetry = {
+            source: 'aggregator',
+            totalReels: allReels.length,
+            pagesProcessed: pageNum,
+            success: true
+          };
+          
+          // Save to database
+          if (upserts.length > 0) {
+            await supa.from('instagram_posts_daily').upsert(upserts, { onConflict: 'id,post_date' });
+            return NextResponse.json({ 
+              success: true, 
+              source, 
+              username: norm, 
+              inserted: upserts.length, 
+              total_views: upserts.reduce((s, u) => s + u.play_count, 0),
+              telemetry: fetchTelemetry
+            });
           }
         } else {
-          console.log(`[fetch-ig] Aggregator HTTP ${aggResp.status}, trying RapidAPI fallback...`);
+          console.log(`[IG Fetch] ⚠️ Aggregator returned 0 reels after ${pageNum} pages, trying RapidAPI fallback...`);
         }
       } catch (aggErr: any) {
         if (aggErr.name === 'AbortError') {
-          console.log(`[fetch-ig] Aggregator timeout (30s), trying RapidAPI fallback...`);
+          console.log(`[IG Fetch] ✗ Aggregator timeout, trying RapidAPI fallback...`);
         } else {
-          console.warn(`[fetch-ig] Aggregator error:`, aggErr.message);
+          console.warn(`[IG Fetch] ✗ Aggregator error:`, aggErr.message);
         }
+        fetchTelemetry = {
+          source: 'aggregator',
+          error: aggErr.message,
+          success: false
+        };
       }
     }
 

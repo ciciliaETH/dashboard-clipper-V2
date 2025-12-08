@@ -94,6 +94,8 @@ export async function GET(req: Request) {
       ))
 
       console.log(`[Top Videos] TikTok: ${tiktokUsernames.length} usernames to query: ${tiktokUsernames.slice(0, 5).join(', ')}${tiktokUsernames.length > 5 ? '...' : ''}`)
+      
+      if (tiktokUsernames.length > 0) {
         // Query tiktok_posts_daily for videos in window
         const { data: tiktokPosts } = await supabase
           .from('tiktok_posts_daily')
@@ -106,8 +108,6 @@ export async function GET(req: Request) {
 
         console.log(`[Top Videos] TikTok: Found ${tiktokPosts?.length || 0} posts in date range ${startISO} to ${endISO}`)
 
-        // Group by video_id and calculate accrual (delta from first to last snapshot)
-        const videoMap = new Map<string, any[]>()
         // Group by video_id and calculate accrual (delta from first to last snapshot)
         const videoMap = new Map<string, any[]>()
         for (const post of tiktokPosts || []) {
@@ -174,7 +174,7 @@ export async function GET(req: Request) {
               total_engagement: likes + comments + shares + saves
             },
             snapshots_count: snapshots.length
-          })
+          });
         }
       }
     }
@@ -199,6 +199,7 @@ export async function GET(req: Request) {
         if (p.instagram_username) {
           instagramUsernames.push(p.instagram_username.toLowerCase().replace(/^@+/, ''))
         }
+      }
       const uniqueIgUsernames = Array.from(new Set(instagramUsernames))
 
       console.log(`[Top Videos] Instagram: ${uniqueIgUsernames.length} usernames to query: ${uniqueIgUsernames.slice(0, 5).join(', ')}${uniqueIgUsernames.length > 5 ? '...' : ''}`)
@@ -216,8 +217,6 @@ export async function GET(req: Request) {
 
         console.log(`[Top Videos] Instagram: Found ${igPosts?.length || 0} posts in date range ${startISO} to ${endISO}`)
 
-        // Group by id and calculate accrual
-        const videoMap = new Map<string, any[]>()
         // Group by id and calculate accrual
         const videoMap = new Map<string, any[]>()
         for (const post of igPosts || []) {
@@ -274,10 +273,15 @@ export async function GET(req: Request) {
               shares: 0,
               saves: 0,
               total_engagement: likes + comments
-            },
+            }
+          });
+        }
+      }
+    }
+
     // Sort by views descending and limit
-    videos.sort((a, b) => b.metrics.views - a.metrics.views)
-    const topVideos = videos.slice(0, limit)
+    videos.sort((a, b) => b.metrics.views - a.metrics.views);
+    const topVideos = videos.slice(0, limit);
 
     console.log(`[Top Videos] Final: ${videos.length} total videos (TikTok + Instagram), showing top ${topVideos.length}`)
     if (topVideos.length > 0) {
@@ -295,13 +299,7 @@ export async function GET(req: Request) {
       total_found: videos.length,
       showing: topVideos.length,
       filtered_by_hashtag: requiredHashtags && requiredHashtags.length > 0
-    })start: startISO,
-      end: endISO,
-      days: windowDays,
-      total_found: videos.length,
-      showing: topVideos.length,
-      filtered_by_hashtag: requiredHashtags && requiredHashtags.length > 0
-    })
+    });
   } catch (e: any) {
     console.error('[top-videos] error:', e)
     return NextResponse.json({ error: e.message }, { status: 500 })

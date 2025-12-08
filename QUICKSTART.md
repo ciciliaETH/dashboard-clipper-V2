@@ -1,37 +1,122 @@
 # Quick Start - Clipper Analytics Dashboard
 
-Panduan cepat untuk mulai menggunakan Clipper Dashboard.
+Panduan cepat untuk mulai menggunakan Clipper Dashboard dengan **Unlimited Sync System**.
 
-## ⚡ 3-Menit Setup
+## ⚡ 5-Menit Setup
 
-### 1. Siapkan Credentials dari Supabase
+### 1. Clone & Install
+```bash
+# Clone repository
+git clone <repository-url>
+cd dashboard-clipper
+
+# Install dependencies
+npm install
+```
+
+### 2. Siapkan Credentials dari Supabase
 - Go ke https://supabase.com - create project
 - Copy 3 keys dari Settings > API:
   - `NEXT_PUBLIC_SUPABASE_URL`
   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
   - `SUPABASE_SERVICE_ROLE_KEY`
 
-### 2. Setup Database
-- Di Supabase SQL Editor, jalankan SQL dari `SETUP_GUIDE.md` (Section 2, Step 4)
-- Ini akan create tables + test users
-
-### 3. Konfigurasi Project
+### 3. Setup Environment Variables
 ```bash
-# Buka project folder
-cd c:\Users\USER\Downloads\dashboard-clipper
+# Copy template
+cp .env.example .env.local
 
-# Edit .env.local
-# Paste credentials dari Supabase
-
-# Install & run
-npm install
-npm run dev
+# Edit .env.local dengan credentials Anda
 ```
 
-### 4. Login & Test
+**Required variables:**
+```bash
+# Supabase (from step 2)
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_anon_key
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+
+# Aggregator API (unlimited, free)
+AGGREGATOR_API_BASE=http://202.10.44.90/api/v1
+AGGREGATOR_ENABLED=1
+AGGREGATOR_UNLIMITED=1
+
+# RapidAPI (fallback, paid)
+RAPID_API_KEYS=your_rapidapi_key_here
+RAPIDAPI_USE_CURSOR=1
+RAPIDAPI_MAX_ITER=999
+
+# Cron Secret (random string)
+CRON_SECRET=your_random_secret_here
+```
+
+### 4. Setup Database
+**Di Supabase SQL Editor, run migrations:**
+```bash
+# Navigate to sql/migrations/ folder
+# Run files in chronological order (2025-10-23 → 2025-12-04)
+```
+
+**Or use quick setup:**
+```sql
+-- See SETUP_GUIDE.md for complete SQL
+-- Creates: users, tiktok_posts_daily, social_metrics_history, campaigns, etc.
+```
+
+### 5. Test Aggregator API (Optional but Recommended)
+```bash
+# Test API connectivity before running
+npm run test:aggregator khaby.lame
+
+# Expected: All 5 tests pass ✅
+```
+
+### 6. Run Development Server
+```bash
+npm run dev
+
+# Open http://localhost:3000
+```
+
+### 7. Login & Test
 - Go to http://localhost:3000/login
 - Email: `admin@example.com`
 - Password: `Admin123!`
+
+---
+
+## 🚀 Test Unlimited Sync
+
+### Test Fetch Endpoint
+```bash
+# Unlimited mode (default) - fetches ALL videos
+curl "http://localhost:3000/api/fetch-metrics/khaby.lame"
+
+# Expected response:
+{
+  "success": true,
+  "fetchSource": "aggregator",
+  "totalVideos": 1547,
+  "telemetry": {
+    "source": "aggregator",
+    "windowsProcessed": 8,
+    "oldestVideoDate": "2016-03-15"
+  }
+}
+```
+
+### Force RapidAPI Fallback
+```bash
+curl "http://localhost:3000/api/fetch-metrics/khaby.lame?rapid=1"
+
+# Should use RapidAPI instead of Aggregator
+```
+
+### Limited Mode (Testing)
+```bash
+# Fetch only 10 pages (legacy mode)
+curl "http://localhost:3000/api/fetch-metrics/khaby.lame?all=0&pages=10"
+```
 
 ---
 

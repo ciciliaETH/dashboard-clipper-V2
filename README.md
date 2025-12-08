@@ -1,14 +1,96 @@
 # Clipper Analytics Dashboard
 
-Dashboard analytics modern untuk menampilkan metrics real-time dari TikTok dengan sistem role-based access control.
+Dashboard analytics modern untuk menampilkan metrics real-time dari TikTok & Instagram dengan **unlimited historical sync** dan sistem role-based access control.
 
 ## Features
 
-- 📊 **Real-time Analytics**: Monitor metrics terbaru dari TikTok
+- 📊 **Real-time Analytics**: Monitor metrics terbaru dari TikTok & Instagram
+- ♾️ **Unlimited Historical Sync**: Ambil SEMUA video dari awal akun dibuat (2016+) dengan 90-day rolling windows
+- 🚀 **Dual API Strategy**: Aggregator API (free, unlimited) → RapidAPI (paid, fallback)
 - 👥 **Team Management**: Kelola tim dengan 3 role berbeda (Admin, Karyawan, Umum)
+- 📈 **Growth Tracking**: Monitor pertumbuhan 7/28/90 hari terakhir secara akurat
 - 🔐 **Secure Authentication**: Powered by Supabase dengan auth system yang aman
 - 🎨 **Modern UI**: Clean, modern design dengan color scheme biru (#2A62FF)
 - 📱 **Responsive**: Fully responsive design untuk semua device
+
+## Unlimited Sync System
+
+### Problem Solved
+Video yang dibuat bulan Agustus tapi viral di bulan Desember **tidak akan missed** lagi! System lama hanya mengambil ~600 video terbaru (6 pages), sekarang bisa ambil **UNLIMITED** dari awal akun dibuat.
+
+### How It Works
+1. **Aggregator API Priority** (Free, Unlimited)
+   - Endpoint: `http://202.10.44.90/api/v1`
+   - 90-day rolling windows untuk comprehensive coverage
+   - Reverse chronological order (newest → oldest)
+   - Rate limit: 500ms between requests
+   - Max: 999 pages per window (~999,000 videos)
+
+2. **RapidAPI Fallback** (Paid, Limited)
+   - Auto-fallback jika Aggregator gagal
+   - Multiple key rotation untuk avoid rate limits
+   - Cursor-based pagination (unlimited mode)
+   - Force dengan query param `?rapid=1`
+
+3. **Smart Deduplication**
+   - Video ID tracking across 90-day windows
+   - Prevents duplicate data insertion
+   - Efficient Set-based lookup
+
+### API Endpoints
+
+#### Fetch User Metrics (Unlimited Mode)
+```bash
+# TikTok: Default Aggregator API unlimited mode
+GET /api/fetch-metrics/{username}
+
+# Instagram: Default Aggregator API unlimited mode
+GET /api/fetch-ig/{username}
+
+# Force RapidAPI fallback (both)
+GET /api/fetch-metrics/{username}?rapid=1
+GET /api/fetch-ig/{username}?rapid=1
+
+# Manual trigger refresh
+GET /api/fetch-metrics/{username}?refresh=1
+GET /api/fetch-ig/{username}?refresh=1
+```
+
+#### Response Structure
+
+**TikTok:**
+```json
+{
+  "success": true,
+  "fetchSource": "aggregator",
+  "totalVideos": 1547,
+  "telemetry": {
+    "source": "aggregator",
+    "totalVideos": 1547,
+    "success": true,
+    "windowsProcessed": 8,
+    "oldestVideoDate": "2016-03-15"
+  },
+  "message": "Berhasil sync 1547 video dari aggregator"
+}
+```
+
+**Instagram:**
+```json
+{
+  "success": true,
+  "source": "aggregator",
+  "username": "tradewithsuli",
+  "inserted": 547,
+  "total_views": 125643,
+  "telemetry": {
+    "source": "aggregator",
+    "totalReels": 547,
+    "pagesProcessed": 12,
+    "success": true
+  }
+}
+```
 
 ## Roles
 

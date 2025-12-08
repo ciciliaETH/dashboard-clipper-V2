@@ -6,7 +6,9 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:aggregator": "node scripts/test-aggregator.js",
+    "test:api": "node scripts/test-aggregator.js"
   },
   "dependencies": {
     "@supabase/auth-helpers-nextjs": "^0.10.0",

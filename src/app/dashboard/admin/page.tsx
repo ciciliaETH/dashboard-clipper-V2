@@ -434,13 +434,15 @@ export default function AdminPage() {
 
     try {
       console.log('[TikTok Refresh] Starting refresh for campaign:', activeCampaignId);
+      console.log('[TikTok Refresh] Auto mode:', autoTikTokMode ? 'ENABLED (will process ALL batches)' : 'DISABLED (single batch)');
       
       const res = await fetch('/api/admin/tiktok/refresh-all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           offset: continueSession ? tikTokOffset : 0,
-          include_details: true
+          include_details: true,
+          auto_continue: autoTikTokMode // CRITICAL: Enable unlimited batch processing in Auto mode
         })
       });
       
@@ -515,6 +517,13 @@ export default function AdminPage() {
         <div className="flex items-center gap-3">
           <button 
             onClick={runAccrualBackfill}
+            disabled={refreshingTikTok || refreshingIG}
+            className="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 bg-gradient-to-r from-purple-600 to-purple-700 text-white shadow-lg hover:shadow-xl transition-all border border-white/10 disabled:opacity-50"
+            title="Backfill campaign series accrual data"
+          >
+            <span className="text-lg">💰</span>
+            <span className="font-medium">Backfill Accrual</span>
+          </button>
           <button 
             onClick={() => {
               setAutoTikTokMode(false); // Manual mode
@@ -537,13 +546,6 @@ export default function AdminPage() {
           >
             <span className="text-lg">🚀</span>
             <span className="font-medium">{autoTikTokMode ? '⚡ AUTO RUNNING...' : '⚡ AUTO ALL'}</span>
-          </button>
-            onClick={() => runTikTokBatch(false)} 
-            disabled={refreshingTikTok}
-            className="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 bg-gradient-to-r from-gray-800 to-gray-900 text-white shadow-lg hover:shadow-xl transition-all border border-white/10 disabled:opacity-50"
-          >
-            <span className="text-lg">🎵</span>
-            <span className="font-medium">{refreshingTikTok ? 'Refreshing TikTok...' : 'Refresh Data TikTok'}</span>
           </button>
           <button 
             onClick={() => {
