@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { createClient as createServerSSR } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 300; // 5 minutes - processes multiple accounts with RapidAPI
+export const maxDuration = 60; // 60 seconds - Vercel Hobby plan limit (use 1 account per batch)
 
 function adminClient() {
   return createClient(
@@ -36,7 +36,7 @@ async function fetchTikTokData(
   startDate: string,
   endDate: string,
   baseUrl: string, 
-  timeout = 300000 // 5 minutes - match fetch-metrics maxDuration for unlimited sync
+  timeout = 50000 // 50 seconds - fit within 60s Vercel limit with buffer
 ): Promise<FetchResult> {
   const start = Date.now();
   try {
@@ -112,7 +112,7 @@ async function refreshHandler(req: Request) {
     // Pro plan: 1 req/sec, with 5s delay = safe with faster processing
     const delayMs = Math.max(0, Math.min(30000, Number(body?.delay_ms || 2000))); // Default 2 seconds (FASTER)
     const limit = Math.max(1, Math.min(10000, Number(body?.limit || 1000)));
-    const accountsPerBatch = 3; // Process 3 accounts per batch (AVOID 300s TIMEOUT!)
+    const accountsPerBatch = 1; // Process 1 account per batch (FIT within 60s Vercel limit!)
     const autoContinue = body?.auto_continue === true; // default FALSE - manual batch to prevent timeout
     const offset = Math.max(0, Number(body?.offset || 0)); // Track which batch we're on
     

@@ -5,7 +5,7 @@ import { randomUUID } from 'crypto';
 import { rapidApiRequest } from '@/lib/rapidapi';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 300; // 5 minutes - aggregator + RapidAPI fallback
+export const maxDuration = 60; // 60 seconds - Vercel Hobby plan limit
 
 // ========================================
 // AGGREGATOR API - PRIORITY #1 (UNLIMITED)
@@ -13,9 +13,9 @@ export const maxDuration = 300; // 5 minutes - aggregator + RapidAPI fallback
 const AGGREGATOR_BASE = process.env.AGGREGATOR_API_BASE || 'http://202.10.44.90/api/v1';
 const AGGREGATOR_ENABLED = process.env.AGGREGATOR_ENABLED !== '0'; // Default: enabled
 const AGGREGATOR_UNLIMITED = process.env.AGGREGATOR_UNLIMITED !== '0'; // Default: unlimited
-const AGGREGATOR_MAX_PAGES = Number(process.env.AGGREGATOR_MAX_PAGES || '999'); // High limit
-const AGGREGATOR_PER_PAGE = Number(process.env.AGGREGATOR_PER_PAGE || '1000'); // Max per request
-const AGGREGATOR_RATE_MS = Number(process.env.AGGREGATOR_RATE_MS || '500'); // Rate limit
+const AGGREGATOR_MAX_PAGES = Number(process.env.AGGREGATOR_MAX_PAGES || '10'); // Limit to 10 pages for 60s timeout
+const AGGREGATOR_PER_PAGE = Number(process.env.AGGREGATOR_PER_PAGE || '100'); // 100 per page (faster)
+const AGGREGATOR_RATE_MS = Number(process.env.AGGREGATOR_RATE_MS || '200'); // 200ms delay (faster)
 
 // ========================================
 // RAPIDAPI - FALLBACK #2
@@ -973,21 +973,14 @@ export async function GET(request: Request, context: any) {
       const seenIds = new Set<string>();
       let totalPages = 0;
       
-      // Calculate date range
+      // Calculate date range (optimize for Vercel 60s limit)
       const endDate = endBound ? new Date(endBound) : new Date();
-      const startDate = startBound ? new Date(startBound) : new Date(endDate.getTime() - 180 * 86400000); // 180 days default
+      const startDate = startBound ? new Date(startBound) : new Date(endDate.getTime() - 90 * 86400000); // 90 days only (fit in 60s)
       
       console.log(`[Aggregator] Date range: ${startDate.toISOString().slice(0,10)} to ${endDate.toISOString().slice(0,10)}`);
       
-      // Create 90-day windows (reverse chronological for recent data first)
-      const windows: { start: Date; end: Date }[] = [];
-      let currentEnd = new Date(endDate);
-      
-      while (currentEnd > startDate) {
-        const currentStart = new Date(Math.max(currentEnd.getTime() - 90 * 86400000, startDate.getTime()));
-        windows.push({ start: currentStart, end: currentEnd });
-        currentEnd = new Date(currentStart.getTime() - 86400000); // Move to day before
-      }
+      // Single 90-day window (no multiple windows - too slow for 60s limit)
+      const windows: { start: Date; end: Date }[] = [{ start: startDate, end: endDate }];
       
       // Process each window
       for (const window of windows) {
