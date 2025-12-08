@@ -180,10 +180,11 @@ async function refreshHandler(req: Request) {
   const maxRetries = 3; // Retry 3x per batch (not unlimited - avoid timeout loops)
   const failedAccountsQueue: string[] = []; // Track failed accounts to retry in next batch
   
-  // Manual batch processing with offset tracking
+  // CRITICAL: ALWAYS process ONLY 1 batch per request to avoid timeout
+  // Client will auto-trigger next batch via setTimeout in admin page
   const totalBatches = Math.ceil(allUsernames.length / accountsPerBatch);
   const startBatch = Math.floor(offset / accountsPerBatch);
-  const endBatch = autoContinue ? totalBatches : startBatch + 1; // Only process 1 batch unless auto-continue
+  const endBatch = startBatch + 1; // ALWAYS 1 batch only (client handles continuation)
   
   for (let batchNum = startBatch; batchNum < endBatch; batchNum++) {
     const batchStart = batchNum * accountsPerBatch;
