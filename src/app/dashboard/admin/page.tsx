@@ -292,7 +292,7 @@ export default function AdminPage() {
   });
   const [autoIGMode, setAutoIGMode] = useState(false); // AUTO-CONTINUE MODE
 
-  const runIGBatch = async (continueSession = false) => {
+  const runIGBatch = async (continueSession = false, customOffset?: number) => {
     setRefreshingIG(true);
     setShowIgContinueDialog(false);
     
@@ -304,13 +304,20 @@ export default function AdminPage() {
     }
 
     try {
+      // CRITICAL: Use customOffset from auto-continue to avoid React state async issue
+      const currentOffset = customOffset !== undefined ? customOffset : (continueSession ? igOffset : 0);
+      console.log('[Instagram Refresh] Starting refresh');
+      console.log('[Instagram Refresh] Using offset:', currentOffset);
+      console.log('[Instagram Refresh] Auto mode:', autoIGMode ? 'ENABLED (will process ALL batches)' : 'DISABLED (single batch)');
+      
       const res = await fetch('/api/admin/ig/refresh-all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          offset: continueSession ? igOffset : 0,
+          offset: currentOffset,
           only_with_user_id: true,
-          include_details: true
+          include_details: true,
+          auto_continue: autoIGMode // Send flag to server (though server ignores it now)
         })
       });
       
@@ -327,6 +334,7 @@ export default function AdminPage() {
       if (!res.ok) throw new Error(j?.error || 'Gagal refresh Instagram');
 
       // Update offset for next batch
+      const nextOffset = j.next_offset || igOffset;
       if (j.next_offset) {
         setIgOffset(j.next_offset);
       }
@@ -354,8 +362,12 @@ export default function AdminPage() {
       // AUTO-CONTINUE MODE: Automatically continue to next batch
       if (j.remaining > 0) {
         if (autoIGMode) {
-          console.log(`[AUTO MODE IG] ${j.remaining} accounts remaining, continuing in 2 seconds...`);
-          setTimeout(() => runIGBatch(true), 2000); // Auto-continue after 2s
+          console.log(`[AUTO MODE IG] ${j.remaining} accounts remaining, continuing in 2 seconds with offset=${nextOffset}...`);
+          // CRITICAL FIX: Pass nextOffset directly as parameter to avoid React state async issue
+          setTimeout(() => {
+            setIgOffset(nextOffset); // Update state for UI display
+            runIGBatch(true, nextOffset); // Pass offset directly to avoid stale closure
+          }, 2000);
         } else {
           setShowIgContinueDialog(true);
         }
