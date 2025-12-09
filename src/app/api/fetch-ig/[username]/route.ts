@@ -7,7 +7,7 @@ import { fetchAllProviders, fetchProfileData, fetchLinksData, IG_HOST, IG_SCRAPE
 import { resolveUserIdViaLink, resolveUserId } from './resolvers';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 300; // 5 minutes - aggregator + RapidAPI fallback
+export const maxDuration = 60; // 60s - fit Vercel Hobby limit
 
 // ============================================
 // AGGREGATOR API CONFIGURATION (Instagram)
@@ -15,8 +15,10 @@ export const maxDuration = 300; // 5 minutes - aggregator + RapidAPI fallback
 const AGG_BASE = process.env.AGGREGATOR_BASE || 'http://202.10.44.90/api/v1';
 const AGG_IG_ENABLED = (process.env.AGGREGATOR_ENABLED !== '0');
 const AGG_IG_UNLIMITED = (process.env.AGGREGATOR_UNLIMITED !== '0');
-const AGG_IG_MAX_PAGES = Number(process.env.AGGREGATOR_MAX_PAGES || 999);
+// Reduce default max pages to ensure we never exceed 60s per request
+const AGG_IG_MAX_PAGES = Number(process.env.AGGREGATOR_MAX_PAGES || 10);
 const AGG_IG_RATE_MS = Number(process.env.AGGREGATOR_RATE_MS || 500);
+const AGG_IG_PAGE_SIZE = Number(process.env.AGGREGATOR_PAGE_SIZE || 50); // use larger page size to minimize pagination
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -71,7 +73,7 @@ export async function GET(req: Request, context: any) {
           pageNum++;
           
           // Build URL with cursor if available
-          let aggUrl = `${AGG_BASE}/instagram/reels?username=${encodeURIComponent(norm)}`;
+          let aggUrl = `${AGG_BASE}/instagram/reels?username=${encodeURIComponent(norm)}&page_size=${Math.min(Math.max(1, AGG_IG_PAGE_SIZE), 50)}`;
           if (currentCursor) {
             aggUrl += `&end_cursor=${encodeURIComponent(currentCursor)}`;
           }
@@ -93,32 +95,35 @@ export async function GET(req: Request, context: any) {
           }
           
           const aggData = await aggResp.json();
-          const aggReels = aggData?.data?.reels || [];
-          const pageInfo = aggData?.data?.page_info || {};
-          const hasNextPage = pageInfo?.has_next_page || pageInfo?.more_available || false;
+          // New Aggregator shape (Dec 9, 2025):
+          // data.xdt_api__v1__clips__user__connection_v2.edges[].node.media
+          const conn = aggData?.data?.xdt_api__v1__clips__user__connection_v2 || {};
+          const edges: any[] = Array.isArray(conn?.edges) ? conn.edges : [];
+          const pageInfo = conn?.page_info || {};
+          const hasNextPage = !!(pageInfo?.has_next_page);
           const nextCursor = pageInfo?.end_cursor || null;
           
           // Process reels from this page
           let newReelsCount = 0;
-          for (const reel of aggReels) {
-            const id = String(reel?.id || '');
-            if (!id || seenIds.has(id)) continue;
-            
-            seenIds.add(id);
+          for (const e of edges) {
+            const node = e?.node || {};
+            const media = node?.media || node;
+            const rawId = String(media?.pk || media?.id || '');
+            if (!rawId) continue;
+            if (seenIds.has(rawId)) continue;
+            seenIds.add(rawId);
             newReelsCount++;
-            
-            const code = String(reel?.code || '');
-            const takenAt = Number(reel?.taken_at || 0);
-            if (!takenAt) continue;
-            
-            const post_date = new Date(takenAt * 1000).toISOString().slice(0, 10);
-            const caption = String(reel?.caption || '');
-            const play = Number(reel?.play_count || reel?.ig_play_count || 0);
-            const like = Number(reel?.like_count || 0);
-            const comment = Number(reel?.comment_count || 0);
-            
+
+            const code = String(media?.code || '');
+            // Aggregator response may not include taken_at; for daily metrics we can safely use today's date
+            const post_date = new Date().toISOString().slice(0, 10);
+            const caption = extractCaption(media, node);
+            const play = Number(media?.play_count ?? media?.view_count ?? media?.video_view_count ?? 0) || 0;
+            const like = Number(media?.like_count ?? 0) || 0;
+            const comment = Number(media?.comment_count ?? 0) || 0;
+
             allReels.push({ 
-              id, 
+              id: rawId, 
               code: code || null, 
               caption: caption || null, 
               username: norm, 
