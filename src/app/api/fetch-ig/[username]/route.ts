@@ -47,6 +47,13 @@ export async function GET(req: Request, context: any) {
   const cleanup = String(url.searchParams.get('cleanup')||'');
   const debug = url.searchParams.get('debug') === '1';
   const allowUsernameFallback = (process.env.FETCH_IG_ALLOW_USERNAME_FALLBACK === '1') || (url.searchParams.get('allow_username') === '1');
+  // Optional tuning via query params
+  const qpMaxPages = Number(url.searchParams.get('max_pages') || '') || undefined;
+  const qpPageSize = Number(url.searchParams.get('page_size') || '') || undefined;
+  const qpBudgetMs = Number(url.searchParams.get('time_budget_ms') || '') || undefined;
+  const maxPages = Math.max(1, Math.min(AGG_IG_MAX_PAGES, qpMaxPages ?? AGG_IG_MAX_PAGES));
+  const pageSize = Math.min(50, Math.max(1, qpPageSize ?? AGG_IG_PAGE_SIZE));
+  const budgetMs = Math.max(5000, Math.min(60000, qpBudgetMs ?? 25000));
 
   const supa = admin();
   const upserts: any[] = [];
@@ -61,6 +68,7 @@ export async function GET(req: Request, context: any) {
       try {
         console.log(`[IG Fetch] 🎯 Starting Aggregator unlimited fetch for @${norm}`);
         
+        const startTs = Date.now();
         const allReels: any[] = [];
         const seenIds = new Set<string>();
         let currentCursor: string | null = null;
@@ -69,19 +77,28 @@ export async function GET(req: Request, context: any) {
         let lastCursor: string | null = null;
         
         // Unlimited pagination loop
-        while (pageNum < AGG_IG_MAX_PAGES) {
+        while (pageNum < maxPages) {
           pageNum++;
           
           // Build URL with cursor if available
-          let aggUrl = `${AGG_BASE}/instagram/reels?username=${encodeURIComponent(norm)}&page_size=${Math.min(Math.max(1, AGG_IG_PAGE_SIZE), 50)}`;
+          let aggUrl = `${AGG_BASE}/instagram/reels?username=${encodeURIComponent(norm)}&page_size=${pageSize}`;
           if (currentCursor) {
             aggUrl += `&end_cursor=${encodeURIComponent(currentCursor)}`;
           }
           
           console.log(`[IG Fetch] 📄 Page ${pageNum}: Fetching from Aggregator...`);
           
+          // Respect overall time budget per request
+          const elapsed = Date.now() - startTs;
+          const remaining = Math.max(0, budgetMs - elapsed);
+          if (remaining < 3000) {
+            console.log(`[IG Fetch] ⏱️ Budget nearly exhausted (${elapsed}ms used), stopping pagination`);
+            break;
+          }
+
           const aggController = new AbortController();
-          const aggTimeout = setTimeout(() => aggController.abort(), 30000);
+          const perPageTimeout = Math.min(30000, Math.max(2500, remaining - 1000));
+          const aggTimeout = setTimeout(() => aggController.abort(), perPageTimeout);
           
           const aggResp = await fetch(aggUrl, { 
             signal: aggController.signal,
@@ -157,6 +174,12 @@ export async function GET(req: Request, context: any) {
           currentCursor = nextCursor;
           
           // Rate limiting
+          // Rate limiting, ensure we don't overshoot budget
+          const postElapsed = Date.now() - startTs;
+          if (postElapsed + AGG_IG_RATE_MS > budgetMs) {
+            console.log(`[IG Fetch] ⏱️ Budget would be exceeded by next delay, stopping at page ${pageNum}`);
+            break;
+          }
           await sleep(AGG_IG_RATE_MS);
         }
         

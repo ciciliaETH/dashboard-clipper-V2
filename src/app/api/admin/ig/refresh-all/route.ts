@@ -30,10 +30,11 @@ interface FetchResult {
   duration_ms?: number;
 }
 
-async function fetchInstagramData(username: string, baseUrl: string, timeout = 20000): Promise<FetchResult> {
+async function fetchInstagramData(username: string, baseUrl: string, timeout = 27000): Promise<FetchResult> {
   const start = Date.now();
   try {
-    const url = `${baseUrl}/api/fetch-ig/${encodeURIComponent(username)}?create=1&allow_username=0`;
+    // Hint the downstream route to fit within our timeout using budget and pagination caps
+    const url = `${baseUrl}/api/fetch-ig/${encodeURIComponent(username)}?create=1&allow_username=0&max_pages=6&page_size=40&time_budget_ms=${Math.max(5000, Math.min(59000, Math.floor(timeout * 0.95)))}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout);
     
