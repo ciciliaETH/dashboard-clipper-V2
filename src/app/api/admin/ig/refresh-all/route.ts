@@ -288,21 +288,19 @@ async function refreshHandler(req: Request) {
       allResults.push(result!);
       
       // VALIDATION: Ensure response has actual data
-      if (result!.ok) {
+      if (result && result.ok) {
         if (processingRetry) {
           await removeRetry(username);
         }
-        const inserted = result!.data?.inserted || 0;
-        const views = result!.data?.instagram?.views || 0;
-        
-        // WARNING: Log if account has ZERO data
+        const inserted = result.data?.inserted || 0;
+        const views = result.data?.instagram?.views || 0;
         if (inserted === 0 && views === 0) {
           console.warn(`[Instagram Refresh] WARNING: ${username} returned ZERO data (empty account or API issue)`);
         }
-        
         batchSuccess++;
         totalSuccess++;
-      } else {
+      }
+      if (!result || !result.ok) {
         // FAILED: enqueue to persistent retry queue and mark this batch failed
         failedAccountsQueue.push(username);
         const errMsg = result?.error || `HTTP ${result?.status || '500'}`;
