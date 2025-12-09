@@ -303,14 +303,13 @@ async function refreshHandler(req: Request) {
         batchSuccess++;
         totalSuccess++;
       } else {
-        // FAILED: Add to queue for retry in next batch
+        // FAILED: enqueue to persistent retry queue and mark this batch failed
         failedAccountsQueue.push(username);
-        console.warn(`[Instagram Refresh] ⚠️ ${username} FAILED, will retry in next batch (queue: ${failedAccountsQueue.length})`);
-        batchFailed++;
-        totalFailed++;
-      } else {
         const errMsg = result?.error || `HTTP ${result?.status || '500'}`;
         await enqueueRetry(username, errMsg);
+        console.warn(`[Instagram Refresh] ⚠️ ${username} FAILED, queued for RETRY`);
+        batchFailed++;
+        totalFailed++;
       }
       
       // Delay after EACH request to avoid rate limits (except last one in batch)
