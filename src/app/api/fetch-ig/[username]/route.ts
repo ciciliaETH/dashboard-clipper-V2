@@ -75,6 +75,17 @@ export async function GET(req: Request, context: any) {
         let pageNum = 0;
         let consecutiveSameCursor = 0;
         let lastCursor: string | null = null;
+
+        // Try to prefetch shortcode->timestamp map via public page scraping
+        const linksMap = new Map<string, number>();
+        try {
+          const linksArr = await fetchLinksData(`https://www.instagram.com/${norm}/reels/`);
+          for (const it of linksArr) {
+            const sc = String(it?.shortcode || it?.meta?.shortcode || '');
+            const ts = parseMs(it?.takenAt || it?.meta?.takenAt);
+            if (sc && ts) linksMap.set(sc, ts);
+          }
+        } catch {}
         
         // Unlimited pagination loop
         while (pageNum < maxPages) {
@@ -132,8 +143,14 @@ export async function GET(req: Request, context: any) {
             newReelsCount++;
 
             const code = String(media?.code || '');
-            // Aggregator response may not include taken_at; for daily metrics we can safely use today's date
-            const post_date = new Date().toISOString().slice(0, 10);
+            // Derive post_date: prefer exact timestamp via linksMap/resolveTimestamp; fallback to today
+            let ms: number | null = null;
+            if (code && linksMap.has(code)) ms = linksMap.get(code)!;
+            if (!ms) {
+              const resolved = await resolveTimestamp(media, node);
+              if (resolved) ms = resolved;
+            }
+            const post_date = ms ? new Date(ms).toISOString().slice(0,10) : new Date().toISOString().slice(0, 10);
             const caption = extractCaption(media, node);
             const play = Number(media?.play_count ?? media?.view_count ?? media?.video_view_count ?? 0) || 0;
             const like = Number(media?.like_count ?? 0) || 0;
