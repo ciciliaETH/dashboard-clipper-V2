@@ -115,6 +115,40 @@ async function refreshHandler(req: Request) {
   const protocol = req.headers.get('x-forwarded-proto') || 'http';
   const host = req.headers.get('host') || 'localhost:3000';
   const baseUrl = `${protocol}://${host}`;
+  
+  // Persistent retry-queue helpers (DB-backed)
+  async function getDueRetry(limitNum: number): Promise<string[]> {
+    const { data } = await supa
+      .from('refresh_retry_queue')
+      .select('username')
+      .eq('platform', 'instagram')
+      .lte('next_retry_at', new Date().toISOString())
+      .order('next_retry_at', { ascending: true })
+      .limit(limitNum);
+    return (data || []).map((r: any) => r.username);
+  }
+  async function removeRetry(username: string) {
+    await supa.from('refresh_retry_queue').delete().eq('platform', 'instagram').eq('username', username);
+  }
+  async function enqueueRetry(username: string, errMsg: string) {
+    const { data: exist } = await supa
+      .from('refresh_retry_queue')
+      .select('retry_count')
+      .eq('platform', 'instagram')
+      .eq('username', username)
+      .maybeSingle();
+    const count = Number(exist?.retry_count || 0);
+    const minutes = Math.min(360, Math.max(2, 2 * Math.pow(2, Math.min(count, 5))));
+    const nextAt = new Date(Date.now() + minutes * 60 * 1000).toISOString();
+    await supa.from('refresh_retry_queue').upsert({
+      platform: 'instagram',
+      username,
+      last_error: (errMsg || 'Unknown').slice(0, 500),
+      retry_count: count + 1,
+      last_error_at: new Date().toISOString(),
+      next_retry_at: nextAt
+    }, { onConflict: 'platform,username' });
+  }
 
   // Get ALL unique Instagram usernames from ALL campaign_instagram_participants (no date filter!)
   // CRITICAL: ORDER BY ensures consistent username order across all requests
@@ -190,6 +224,15 @@ async function refreshHandler(req: Request) {
     const batchStart = batchNum * accountsPerBatch;
     const batchEnd = Math.min(batchStart + accountsPerBatch, usernamesToFetch.length);
     let batchUsernames = usernamesToFetch.slice(batchStart, batchEnd);
+    let processingRetry = false;
+    
+    // Prefer persistent retry queue first
+    const dueRetry = await getDueRetry(accountsPerBatch);
+    if (dueRetry.length > 0) {
+      batchUsernames = dueRetry.slice(0, accountsPerBatch);
+      processingRetry = true;
+      console.log(`[Instagram Refresh] 🔁 Processing RETRY QUEUE first: ${batchUsernames.join(', ')}`);
+    }
     
     // CRITICAL: Prepend failed accounts from previous batch to RETRY them first
     if (failedAccountsQueue.length > 0) {
@@ -246,6 +289,9 @@ async function refreshHandler(req: Request) {
       
       // VALIDATION: Ensure response has actual data
       if (result!.ok) {
+        if (processingRetry) {
+          await removeRetry(username);
+        }
         const inserted = result!.data?.inserted || 0;
         const views = result!.data?.instagram?.views || 0;
         
@@ -262,6 +308,9 @@ async function refreshHandler(req: Request) {
         console.warn(`[Instagram Refresh] ⚠️ ${username} FAILED, will retry in next batch (queue: ${failedAccountsQueue.length})`);
         batchFailed++;
         totalFailed++;
+      } else {
+        const errMsg = result?.error || `HTTP ${result?.status || '500'}`;
+        await enqueueRetry(username, errMsg);
       }
       
       // Delay after EACH request to avoid rate limits (except last one in batch)
@@ -308,7 +357,7 @@ async function refreshHandler(req: Request) {
     }
   }
 
-  const processedCount = offset + allResults.length;
+  const processedCount = offset + (allResults.length > 0 && allResults.every(r => failedAccountsQueue.includes(r.username)) ? 0 : allResults.length);
   const remainingCount = usernamesToFetch.length - processedCount;
   const nextOffset = remainingCount > 0 ? processedCount : 0;
   
@@ -347,6 +396,9 @@ async function refreshHandler(req: Request) {
     accounts_per_batch: accountsPerBatch,
     delay_ms: delayMs,
     results: body?.include_details ? allResults : undefined,
+    retry_queue: failedAccountsQueue.length,
+    retry_queue_usernames: failedAccountsQueue,
+    retry_queue_pending: (await getDueRetry(1000)).length,
     failed_usernames: failedResults.length > 0 ? failedResults.map(r => ({ 
       username: r.username, 
       error: r.error,

@@ -122,6 +122,40 @@ async function refreshHandler(req: Request) {
     const host = req.headers.get('host') || 'localhost:3000';
     const baseUrl = `${protocol}://${host}`;
     
+    // Persistent retry-queue helpers (DB-backed)
+    async function getDueRetry(limitNum: number): Promise<string[]> {
+      const { data } = await supa
+        .from('refresh_retry_queue')
+        .select('username')
+        .eq('platform', 'tiktok')
+        .lte('next_retry_at', new Date().toISOString())
+        .order('next_retry_at', { ascending: true })
+        .limit(limitNum);
+      return (data || []).map((r: any) => r.username);
+    }
+    async function removeRetry(username: string) {
+      await supa.from('refresh_retry_queue').delete().eq('platform', 'tiktok').eq('username', username);
+    }
+    async function enqueueRetry(username: string, errMsg: string) {
+      const { data: exist } = await supa
+        .from('refresh_retry_queue')
+        .select('retry_count')
+        .eq('platform', 'tiktok')
+        .eq('username', username)
+        .maybeSingle();
+      const count = Number(exist?.retry_count || 0);
+      const minutes = Math.min(360, Math.max(2, 2 * Math.pow(2, Math.min(count, 5))));
+      const nextAt = new Date(Date.now() + minutes * 60 * 1000).toISOString();
+      await supa.from('refresh_retry_queue').upsert({
+        platform: 'tiktok',
+        username,
+        last_error: (errMsg || 'Unknown').slice(0, 500),
+        retry_count: count + 1,
+        last_error_at: new Date().toISOString(),
+        next_retry_at: nextAt
+      }, { onConflict: 'platform,username' });
+    }
+    
     // Get ALL unique TikTok usernames from ALL campaign_participants (no date filter!)
     // CRITICAL: ORDER BY ensures consistent username order across all requests
     const { data: rows, error: dbError } = await supa
@@ -193,6 +227,15 @@ async function refreshHandler(req: Request) {
     const batchStart = batchNum * accountsPerBatch;
     const batchEnd = Math.min(batchStart + accountsPerBatch, allUsernames.length);
     let batchUsernames = allUsernames.slice(batchStart, batchEnd);
+    let processingRetry = false;
+    
+    // Prefer persistent retry queue first
+    const dueRetry = await getDueRetry(accountsPerBatch);
+    if (dueRetry.length > 0) {
+      batchUsernames = dueRetry.slice(0, accountsPerBatch);
+      processingRetry = true;
+      console.log(`[TikTok Refresh] 🔁 Processing RETRY QUEUE first: ${batchUsernames.join(', ')}`);
+    }
     
     // CRITICAL: Prepend failed accounts from previous batch to RETRY them first
     if (failedAccountsQueue.length > 0) {
@@ -256,6 +299,9 @@ async function refreshHandler(req: Request) {
       // Update ALL campaigns that have this username - CRITICAL: Save data immediately
       // VALIDATION: Ensure response has actual data (not just empty success)
       if (result && result.ok && result.data?.tiktok) {
+        if (processingRetry) {
+          await removeRetry(username);
+        }
         const t = result.data.tiktok;
         
         // WARNING: Log if account has ZERO data (might be empty account or API issue)
@@ -289,9 +335,11 @@ async function refreshHandler(req: Request) {
         batchSuccess++;
         totalSuccess++;
       } else {
-        // FAILED: Add to queue for retry in next batch
+        // FAILED: Add to DB retry queue
         failedAccountsQueue.push(username);
-        console.warn(`[TikTok Refresh] ⚠️ ${username} FAILED, will retry in next batch (queue: ${failedAccountsQueue.length})`);
+        const errMsg = result?.error || `HTTP ${result?.status || '500'}`;
+        await enqueueRetry(username, errMsg);
+        console.warn(`[TikTok Refresh] ⚠️ ${username} FAILED, queued for RETRY`);
         batchFailed++;
         totalFailed++;
       }
@@ -345,7 +393,8 @@ async function refreshHandler(req: Request) {
     }
   }
 
-  const processedCount = offset + allResults.length;
+  // If processing only retry items, don't advance offset
+  const processedCount = offset + (allResults.length > 0 && allResults.every(r => failedAccountsQueue.includes(r.username)) ? 0 : allResults.length);
   const remainingCount = allUsernames.length - processedCount;
   const nextOffset = remainingCount > 0 ? processedCount : 0;
   
@@ -368,8 +417,9 @@ async function refreshHandler(req: Request) {
     success: totalSuccess,
     failed: totalFailed,
     remaining: remainingCount,
-    retry_queue: failedAccountsQueue.length, // New: Number of accounts queued for retry
-    retry_queue_usernames: failedAccountsQueue, // New: List of accounts to retry
+    retry_queue: failedAccountsQueue.length,
+    retry_queue_usernames: failedAccountsQueue,
+    retry_queue_pending: (await getDueRetry(1000)).length,
     offset: offset,
     next_offset: nextOffset,
     total_posts: totalPosts,
