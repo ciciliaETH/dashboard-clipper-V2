@@ -175,12 +175,17 @@ export async function GET(req: Request, context: any) {
           // Save to database
           if (upserts.length > 0) {
             await supa.from('instagram_posts_daily').upsert(upserts, { onConflict: 'id,post_date' });
+            const totalViews = upserts.reduce((s, u) => s + (Number(u.play_count) || 0), 0);
+            const totalLikes = upserts.reduce((s, u) => s + (Number(u.like_count) || 0), 0);
+            const totalComments = upserts.reduce((s, u) => s + (Number(u.comment_count) || 0), 0);
             return NextResponse.json({ 
               success: true, 
               source, 
               username: norm, 
               inserted: upserts.length, 
-              total_views: upserts.reduce((s, u) => s + u.play_count, 0),
+              total_views: totalViews,
+              total_likes: totalLikes,
+              total_comments: totalComments,
               telemetry: fetchTelemetry
             });
           }

@@ -291,8 +291,8 @@ async function refreshHandler(req: Request) {
   const failedResults = allResults.filter(r => !r.ok);
   
   const totalPosts = successResults.reduce((sum, r) => sum + (r.data?.inserted || 0), 0);
-  const totalViews = successResults.reduce((sum, r) => sum + (r.data?.instagram?.views || 0), 0);
-  const totalLikes = successResults.reduce((sum, r) => sum + (r.data?.instagram?.likes || 0), 0);
+  const totalViews = successResults.reduce((sum, r) => sum + (r.data?.total_views || r.data?.instagram?.views || 0), 0);
+  const totalLikes = successResults.reduce((sum, r) => sum + (r.data?.total_likes || r.data?.instagram?.likes || 0), 0);
   const avgDuration = allResults.length > 0 
     ? Math.round(allResults.reduce((sum, r) => sum + (r.duration_ms || 0), 0) / allResults.length)
     : 0;
@@ -354,8 +354,8 @@ async function refreshHandler(req: Request) {
     success_details: body?.include_details ? successResults.map(r => ({
       username: r.username,
       posts: r.data?.inserted || 0,
-      views: r.data?.instagram?.views || 0,
-      likes: r.data?.instagram?.likes || 0,
+      views: r.data?.total_views || r.data?.instagram?.views || 0,
+      likes: r.data?.total_likes || r.data?.instagram?.likes || 0,
       source: r.data?.source
     })) : undefined
   });
