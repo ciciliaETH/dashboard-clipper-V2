@@ -44,29 +44,22 @@ export default function DashboardTotalPage() {
       const effEnd = mode==='accrual' ? todayStr : end;
 
       let json:any = null;
-      if (mode==='accrual' && activeCampaignId) {
-        // Use campaign accrual to mirror /group page
-        const u = `/api/campaigns/${encodeURIComponent(activeCampaignId)}/accrual?days=${accrualWindow}&cutoff=${encodeURIComponent(accrualCutoff)}&snapshots_only=1`;
-        const r = await fetch(u, { cache: 'no-store' });
-        const acc = await r.json();
-        json = {
-          total: acc?.series_total || [],
-          total_tiktok: acc?.series_tiktok || [],
-          total_instagram: acc?.series_instagram || [],
-          groups: [ { id: activeCampaignId, name: activeCampaignName || 'Group Aktif', series: acc?.series_total || [], series_tiktok: acc?.series_tiktok || [], series_instagram: acc?.series_instagram || [] } ],
-          totals: acc?.totals || { views:0, likes:0, comments:0 }
-        };
+      // Always use /api/groups/series so semua group tampil
+      const url = new URL('/api/groups/series', window.location.origin);
+      if (mode === 'accrual') {
+        url.searchParams.set('mode', 'accrual');
+        url.searchParams.set('days', String(accrualWindow));
+        url.searchParams.set('snapshots_only', '1');
+        url.searchParams.set('cutoff', accrualCutoff);
       } else {
-        // Fallback to global series (postdate mode atau belum ada campaign id)
-        const url = new URL('/api/groups/series', window.location.origin);
         url.searchParams.set('start', effStart);
         url.searchParams.set('end', effEnd);
         url.searchParams.set('interval', interval);
         url.searchParams.set('mode', mode);
         url.searchParams.set('cutoff', accrualCutoff);
-        const res = await fetch(url.toString(), { cache: 'no-store' });
-        json = await res.json();
       }
+      const res = await fetch(url.toString(), { cache: 'no-store' });
+      json = await res.json();
       // Ensure platform arrays exist (older API responses might miss them)
       try {
         if (Array.isArray(json?.groups)) {
