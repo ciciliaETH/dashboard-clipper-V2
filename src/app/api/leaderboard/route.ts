@@ -66,21 +66,8 @@ export async function GET(req: Request) {
       for (const [, arr] of byUserPlat.entries()) {
         let prevRow:any = null; const uid = String((arr?.[0] as any)?.user_id);
         for (const r of arr) {
-          if (!prevRow) {
-            const d0 = String((r as any).captured_at).slice(0,10);
-            if (d0 >= startISO && d0 <= endISO) {
-              const cur0 = totalsByUser.get(uid) || { views:0, likes:0, comments:0, shares:0, saves:0 };
-              cur0.views += Math.max(0, Number((r as any).views||0));
-              cur0.likes += Math.max(0, Number((r as any).likes||0));
-              cur0.comments += Math.max(0, Number((r as any).comments||0));
-              cur0.shares += Math.max(0, Number((r as any).shares||0));
-              cur0.saves += Math.max(0, Number((r as any).saves||0));
-              totalsByUser.set(uid, cur0);
-            }
-            prevRow = r; continue;
-          }
           const date = String((r as any).captured_at).slice(0,10);
-          if (date >= startISO && date <= endISO) {
+          if (prevRow && date >= startISO && date <= endISO) {
             const cur = totalsByUser.get(uid) || { views:0, likes:0, comments:0, shares:0, saves:0 };
             cur.views += Math.max(0, Number((r as any).views||0) - Number((prevRow as any).views||0));
             cur.likes += Math.max(0, Number((r as any).likes||0) - Number((prevRow as any).likes||0));
