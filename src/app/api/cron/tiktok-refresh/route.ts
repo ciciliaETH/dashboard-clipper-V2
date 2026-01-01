@@ -14,16 +14,20 @@ function adminClient() {
 
 export async function GET(req: Request) {
   try {
-    // Verify cron secret for security
-    const { searchParams } = new URL(req.url)
-    const cronSecret = searchParams.get('secret') || req.headers.get('x-cron-secret')
-    const expectedSecret = process.env.CRON_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY
+    // Verify cron secret for security (support multiple auth methods like Instagram endpoint)
+    const url = new URL(req.url)
+    const { searchParams } = url
+    const authHeader = req.headers.get('authorization')
+    const token = authHeader?.replace(/^Bearer\s+/i, '')
+    const secretParam = searchParams.get('secret')
+    const cronSecret = process.env.CRON_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY
+    const isVercelCron = Boolean(req.headers.get('x-vercel-cron'))
     
-    if (!cronSecret || cronSecret !== expectedSecret) {
+    // Allow if: Vercel Cron header, valid token, or valid secret param
+    if (!isVercelCron && token !== cronSecret && secretParam !== cronSecret) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
     
-    const url = new URL(req.url)
     const baseUrl = `${url.protocol}//${url.host}`
 
     // Call internal Next.js endpoint instead of Supabase Edge Function
